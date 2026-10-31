@@ -239,7 +239,7 @@ def transcription_payload(job_id: str) -> dict:
     }
 
 
-def run_transcription_job(job_id: str, source_path: str) -> None:
+def run_transcription_job(job_id: str, source_path: str, model_name: str, language: str | None) -> None:
     def update_progress(value: float) -> None:
         with get_connection() as connection:
             connection.execute(
@@ -253,7 +253,7 @@ def run_transcription_job(job_id: str, source_path: str) -> None:
                 "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=?",
                 (now_iso(), job_id),
             )
-        result = transcription.transcribe_file(Path(source_path), progress=update_progress)
+        result = transcription.transcribe_file(\n            Path(source_path), model_name=model_name, language=language, progress=update_progress\n        )
         with get_connection() as connection:
             connection.executemany(
                 "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
@@ -305,7 +305,7 @@ async def start_transcription(
             ) VALUES(?,?,'queued',?,?,?,?)""",
             (job_id, asset_id, payload.model_name, payload.language, timestamp, timestamp),
         )
-    background_tasks.add_task(run_transcription_job, job_id, str(source_path))
+    background_tasks.add_task(\n        run_transcription_job, job_id, str(source_path), payload.model_name, payload.language\n    )
     return transcription_payload(job_id)
 
 
