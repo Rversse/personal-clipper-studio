@@ -28,7 +28,9 @@
 - [x] Optional FFmpeg ASS subtitle burn-in with edited transcript text
 - [x] Ordered multi-clip sequence with per-clip trim ranges and reorder/remove controls
 - [x] FFmpeg sequence assembly with optional subtitle burn-in
-- [ ] Visual multi-track timeline and crop repositioning
+- [x] Crop zoom and horizontal/vertical focal positioning in preview and FFmpeg output
+- [x] Convert split markers into renderable sequence clips
+- [ ] Visual multi-track timeline
 - [ ] Safe context-aware clip boundaries
 
 ## Phase 5 — rendering and delivery (partial)
