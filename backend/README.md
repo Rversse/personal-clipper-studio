@@ -58,3 +58,13 @@ AI discovery analyzes saved transcript segments; it does not upload the source v
 Configuration is read from the backend process environment. API keys are never written to SQLite or returned by the API. Do not put secrets in frontend environment variables or commit them to the repository.
 
 The discovery endpoint requires a completed transcription. It analyzes transcript chunks sequentially with overlap, validates returned timestamps against real transcript segment boundaries, enforces the requested 15–180 second duration range, filters malformed/low-quality results, and deduplicates overlapping candidates. Discovery jobs and candidate metadata are stored locally in SQLite.
+
+
+## FFmpeg clip export (Phase 5)
+
+Install a recent FFmpeg build and make sure `ffmpeg` is available on PATH. The Export Center creates an MP4/H.264 clip with AAC audio, fast-start metadata, square pixels, and a 1080p output frame for the selected 9:16, 16:9, or 1:1 ratio.
+
+- NVIDIA NVENC is attempted when the FFmpeg build advertises `h264_nvenc`. If the encoder fails at runtime (for example, unavailable hardware or driver support), the renderer retries with CPU `libx264`.
+- Output is written to a temporary `.partial.mp4` file and renamed only after FFmpeg succeeds and the file passes a basic size check. Failed partial output is removed.
+- Export job metadata is stored in SQLite and completed files are saved under the local `exports` directory. The API exposes `GET /api/exports`, `GET /api/exports/{job_id}`, and `GET /api/exports/{job_id}/file`.
+- Current rendering exports one trimmed source-video range per job. Subtitle burn-in, multi-clip assembly, true batch scheduling, and crash recovery are not implemented yet.
