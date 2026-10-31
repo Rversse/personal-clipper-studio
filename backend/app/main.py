@@ -12,7 +12,8 @@ from fastapi.responses import FileResponse, Response
 
 from .database import MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
-from .schemas import (MediaResponse, ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse)\nfrom . import transcription
+from .schemas import (MediaResponse, ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse)
+from . import transcription
 
 app = FastAPI(
     title="Personal Clipper Studio API",
@@ -253,7 +254,9 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
                 "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=?",
                 (now_iso(), job_id),
             )
-        result = transcription.transcribe_file(\n            Path(source_path), model_name=model_name, language=language, progress=update_progress\n        )
+        result = transcription.transcribe_file(
+            Path(source_path), model_name=model_name, language=language, progress=update_progress
+        )
         with get_connection() as connection:
             connection.executemany(
                 "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
@@ -305,7 +308,9 @@ async def start_transcription(
             ) VALUES(?,?,'queued',?,?,?,?)""",
             (job_id, asset_id, payload.model_name, payload.language, timestamp, timestamp),
         )
-    background_tasks.add_task(\n        run_transcription_job, job_id, str(source_path), payload.model_name, payload.language\n    )
+    background_tasks.add_task(
+        run_transcription_job, job_id, str(source_path), payload.model_name, payload.language
+    )
     return transcription_payload(job_id)
 
 
