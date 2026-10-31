@@ -70,12 +70,15 @@ function App() {
   const [burnSubtitles, setBurnSubtitles] = useState(false);
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const [clipSequence, setClipSequence] = useState<ClipSegment[]>([]);
+  const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [editorSaved, setEditorSaved] = useState(false);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [exportBusy, setExportBusy] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
   const editorCandidate = editorCandidateId ? discovery?.candidates.find(item => item.id === editorCandidateId) : undefined;
   const editorDuration = Math.max(0, editEnd - editStart);
+  const editorSourceDuration = Math.max(0, media.find(item => item.id === aiMediaId)?.duration ?? previewRef.current?.duration ?? 0);
+  const visibleSplitPoints = splitPoints.filter(point => point > editStart && point < editEnd);
   const visibleSubtitleSegments = (transcription?.media_id === aiMediaId ? transcription.segments ?? [] : []).filter(segment => segment.end > editStart && segment.start < editEnd);
 
   const loadProjects = useCallback(async () => {
@@ -408,8 +411,16 @@ function App() {
   function seekPreview(seconds: number) {
     if (previewRef.current) {
       previewRef.current.currentTime = seconds;
+      setPlayheadSeconds(seconds);
       void previewRef.current.play();
     }
+  }
+
+  function selectSequenceClip(clip: ClipSegment) {
+    setEditorCandidateId("");
+    setEditStart(clip.start);
+    setEditEnd(clip.end);
+    seekPreview(clip.start);
   }
 
   function openProject(project: Project) {
@@ -482,10 +493,16 @@ function App() {
               <div className="editor-layout">
                 <div className="editor-preview-panel">
                   <div className="editor-panel-head"><div><strong>Preview monitor</strong><small>{media.find(item=>item.id===aiMediaId)?.original_name}</small></div><span className="editor-live-tag">SOURCE PREVIEW</span></div>
-                  <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" style={{ objectPosition: `${cropX*100}% ${cropY*100}%`, transform: `scale(${cropZoom})` }} src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onLoadedMetadata={e=>{if(editEnd<=0&&Number.isFinite(e.currentTarget.duration))setEditEnd(e.currentTarget.duration);if(editStart>0)e.currentTarget.currentTime=editStart;}} /></div>
+                  <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" style={{ objectPosition: `${cropX*100}% ${cropY*100}%`, transform: `scale(${cropZoom})` }} src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onTimeUpdate={e=>setPlayheadSeconds(e.currentTarget.currentTime)} onLoadedMetadata={e=>{if(editEnd<=0&&Number.isFinite(e.currentTarget.duration))setEditEnd(e.currentTarget.duration);if(editStart>0)e.currentTarget.currentTime=editStart;setPlayheadSeconds(e.currentTarget.currentTime);}} /></div>
                   <div className="preview-actions"><button className="secondary-button" onClick={()=>seekPreview(editStart)}>Play from in</button><button className="secondary-button" onClick={()=>seekPreview(editEnd)}>Go to out</button></div>
-                  <div className="timeline-panel"><div className="timeline-heading"><strong>Clip range</strong><span>{formatDuration(editorDuration)}</span></div>
-                    <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/>{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><b key={point} className="timeline-split" style={{left:(((point-editStart)/editorDuration)*100)+"%"}}/>)}</div>
+                  <div className="timeline-panel"><div className="timeline-heading"><strong>Source timeline</strong><span>{formatTimestamp(editStart)} – {formatTimestamp(editEnd)} · {formatDuration(editorDuration)}</span></div>
+                    <div className="timeline-ruler">{[0, 0.25, 0.5, 0.75, 1].map(fraction=><span key={fraction} style={{left:(fraction*100)+"%"}}>{formatTimestamp(editorSourceDuration*fraction)}</span>)}</div>
+                    <div className="timeline-track" role="img" aria-label={"Selected range "+formatTimestamp(editStart)+" sampai "+formatTimestamp(editEnd)}>
+                      <i style={{left:(editorSourceDuration ? editStart/editorSourceDuration*100 : 0)+"%",width:(editorSourceDuration ? editorDuration/editorSourceDuration*100 : 0)+"%"}}/>
+                      {visibleSplitPoints.map(point=><b key={point} className="timeline-split" style={{left:(editorSourceDuration ? point/editorSourceDuration*100 : 0)+"%"}}/>)}
+                      <em className="timeline-playhead" style={{left:(editorSourceDuration ? Math.min(100,playheadSeconds/editorSourceDuration*100) : 0)+"%"}}/>
+                    </div>
+                    <div className="timeline-legend"><span><i/> Selected range</span><span><b/> Split point</span><span><em/> Playhead</span></div>
                     <div className="split-toolbar"><button className="secondary-button" onClick={addSplitPoint}>Split at playhead</button><span>{splitPoints.filter(point=>point>editStart&&point<editEnd).length} split point</span></div>
                     {splitPoints.some(point=>point>editStart&&point<editEnd) && <button className="secondary-button sequence-add" onClick={addSplitRangesToSequence} disabled={clipSequence.length>=100}>Add split ranges to sequence</button>}
                     {splitPoints.filter(point=>point>editStart&&point<editEnd).length>0 && <div className="split-list">{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><button key={point} onClick={()=>setSplitPoints(previous=>previous.filter(item=>item!==point))}>{formatTimestamp(point)} <X size={11}/></button>)}</div>}
@@ -494,6 +511,7 @@ function App() {
                       <button className="secondary-button sequence-add" onClick={addCurrentRangeToSequence} disabled={editEnd<=editStart||clipSequence.length>=100}>Add current range to sequence <Plus size={13}/></button>
                       {clipSequence.length>0 ? <ol className="sequence-list">{clipSequence.map((clip,index)=><li key={index}><span><b>{String(index+1).padStart(2,"0")}</b>{formatTimestamp(clip.start)} – {formatTimestamp(clip.end)}<small>{formatDuration(clip.end-clip.start)}</small></span><div><button aria-label="Move clip up" title="Move up" disabled={index===0} onClick={()=>moveSequenceClip(index,-1)}>↑</button><button aria-label="Move clip down" title="Move down" disabled={index===clipSequence.length-1} onClick={()=>moveSequenceClip(index,1)}>↓</button><button aria-label="Remove clip" title="Remove" onClick={()=>setClipSequence(previous=>previous.filter((_,i)=>i!==index))}><X size={12}/></button></div></li>)}</ol> : <p className="sequence-empty">Belum ada urutan khusus. Render akan menggunakan rentang aktif.</p>}
                       {clipSequence.length>0 && <button className="sequence-clear" onClick={()=>setClipSequence([])}>Clear sequence</button>}
+                      {clipSequence.length>0 && <div className="sequence-visual" aria-label="Visual clip sequence">{clipSequence.map((clip,index)=><button type="button" key={String(clip.start)+"-"+String(clip.end)+"-"+index} title={"Pilih klip "+(index+1)+": "+formatTimestamp(clip.start)+" – "+formatTimestamp(clip.end)} aria-label={"Pilih klip "+(index+1)} onClick={()=>selectSequenceClip(clip)}><b>{String(index+1).padStart(2,"0")}</b><span>{formatDuration(clip.end-clip.start)}</span></button>)}</div>}
                     </div>
                     <div className="trim-grid">
                       <label>In point (seconds)<input type="number" min="0" step="0.1" value={editStart} onChange={e=>setEditStart(Math.max(0,Math.min(Number(e.target.value),editEnd-0.1)))}/></label>
