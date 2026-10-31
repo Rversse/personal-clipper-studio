@@ -43,7 +43,9 @@ def test_render_command_has_trim_crop_and_safe_audio_mapping(tmp_path):
     )
     assert command[command.index("-ss") + 1] == "5.000"
     assert command[command.index("-t") + 1] == "30.000"
-    assert "crop=1080:1920" in command[command.index("-vf") + 1]
+    video_filter = command[command.index("-vf") + 1]
+    assert "crop=w=1080/(1.0000):h=1920/(1.0000)" in video_filter
+    assert "scale=1080:1920,setsar=1" in video_filter
     assert command[command.index("-map") + 3] == "0:a:0?"
     assert "libx264" in command
     assert "+faststart" in command
@@ -379,3 +381,64 @@ def test_export_api_rejects_sequence_segment_outside_source(tmp_path, monkeypatc
         )
         assert response.status_code == 422
         assert "melewati durasi" in response.json()["detail"]
+
+
+
+def test_render_command_applies_zoom_and_focal_position(tmp_path):
+    command = rendering.build_render_command(
+        tmp_path / "source.mp4", tmp_path / "output.mp4", 0, 10,
+        "9:16", "libx264", crop_zoom=1.75, crop_x=0.2, crop_y=0.8,
+    )
+    video_filter = command[command.index("-vf") + 1]
+    assert "crop=w=1080/(1.7500):h=1920/(1.7500)" in video_filter
+    assert ")*0.2000" in video_filter
+    assert ")*0.8000" in video_filter
+
+
+def test_render_command_rejects_invalid_crop_values(tmp_path):
+    for zoom, x, y in [(0.9, 0.5, 0.5), (3.1, 0.5, 0.5), (1.0, -0.1, 0.5), (1.0, 0.5, 1.1)]:
+        try:
+            rendering.build_render_command(
+                tmp_path / "source.mp4", tmp_path / "out.mp4",
+                0, 10, "9:16", "libx264", crop_zoom=zoom, crop_x=x, crop_y=y,
+            )
+        except rendering.RenderError:
+            pass
+        else:
+            raise AssertionError("Invalid crop values must be rejected")
+
+
+def test_export_api_persists_crop_settings(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 5, "end_seconds": 40,
+                "crop_zoom": 1.8, "crop_x": 0.25, "crop_y": 0.7,
+            },
+        )
+        assert response.status_code == 202
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT crop_zoom,crop_x,crop_y FROM export_jobs WHERE id=?",
+                (response.json()["id"],),
+            ).fetchone()
+        assert row["crop_zoom"] == 1.8
+        assert row["crop_x"] == 0.25
+        assert row["crop_y"] == 0.7
+
+
+def test_export_api_rejects_crop_settings_outside_supported_range(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 40, "crop_zoom": 3.5},
+        )
+        assert response.status_code == 422
