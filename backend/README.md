@@ -67,4 +67,6 @@ Install a recent FFmpeg build and make sure `ffmpeg` is available on PATH. The E
 - NVIDIA NVENC is attempted when the FFmpeg build advertises `h264_nvenc`. If the encoder fails at runtime (for example, unavailable hardware or driver support), the renderer retries with CPU `libx264`.
 - Output is written to a temporary `.partial.mp4` file and renamed only after FFmpeg succeeds and the file passes a basic size check. Failed partial output is removed.
 - Export job metadata is stored in SQLite and completed files are saved under the local `exports` directory. The API exposes `GET /api/exports`, `GET /api/exports/{job_id}`, and `GET /api/exports/{job_id}/file`.
-- Current rendering exports one trimmed source-video range per job. Subtitle burn-in, multi-clip assembly, true batch scheduling, and crash recovery are not implemented yet.
+- Optional subtitle burn-in uses the edited transcript text and ASS subtitles with Clean, Bold, or Highlight styling. Enable it in Subtitle Studio; the selected preset and edited segments are persisted with the export job.
+- Subtitle burn-in requires an FFmpeg build with the `subtitles` filter (libass). The API rejects burn-in requests with a clear error when that filter is unavailable; it never silently exports without captions. Temporary ASS files are removed after rendering.
+- Current rendering exports one trimmed source-video range per job. Multi-clip assembly, true batch scheduling, live progress, cancellation, and automatic resumption after a crash are not implemented yet.
