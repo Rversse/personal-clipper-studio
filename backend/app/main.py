@@ -406,7 +406,7 @@ def run_discovery_job(job_id: str) -> None:
                 return
             segments = connection.execute(
                 """SELECT start,end,text FROM transcript_segments
-                   WHERE job_id=(SELECT id FROM transcription_jobs WHERE id=?)
+                   WHERE job_id=?
                    ORDER BY start""",
                 (job["transcription_id"],),
             ).fetchall()
