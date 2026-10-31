@@ -125,6 +125,11 @@ class ExportSubtitleSegment(BaseModel):
     text: str = Field(max_length=500)
 
 
+class ExportClipSegment(BaseModel):
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
+
+
 class ExportCreate(BaseModel):
     start_seconds: float = Field(ge=0, allow_inf_nan=False)
     end_seconds: float = Field(gt=0, allow_inf_nan=False)
@@ -132,6 +137,7 @@ class ExportCreate(BaseModel):
     burn_subtitles: bool = False
     subtitle_preset: Literal["clean", "bold", "highlight"] = "clean"
     subtitle_segments: list[ExportSubtitleSegment] = Field(default_factory=list, max_length=10000)
+    clip_segments: list[ExportClipSegment] = Field(default_factory=list, max_length=100)
 
 
 class ExportResponse(BaseModel):
@@ -142,6 +148,7 @@ class ExportResponse(BaseModel):
     end_seconds: float
     aspect_ratio: str
     output_name: str
+    clip_count: int = 1
     encoder: str | None = None
     progress: float
     error: str | None = None
