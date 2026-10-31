@@ -16,16 +16,19 @@ def probe_media(path: Path) -> dict[str, Any]:
     if not ffprobe:
         return {"available": False, "message": "FFprobe belum ditemukan di PATH."}
 
-    result = subprocess.run(
-        [
-            ffprobe, "-v", "error", "-show_streams", "-show_format",
-            "-of", "json", str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=90,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                ffprobe, "-v", "error", "-show_streams", "-show_format",
+                "-of", "json", str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("FFprobe melewati batas waktu analisis 90 detik.") from error
     if result.returncode != 0:
         detail = result.stderr.strip()[-1200:]
         raise ValueError(f"FFprobe gagal membaca file: {detail or 'format tidak dikenali'}")
@@ -62,15 +65,19 @@ def create_thumbnail(source: Path, destination: Path) -> bool:
     ffmpeg = executable("ffmpeg")
     if not ffmpeg:
         return False
-    result = subprocess.run(
-        [
-            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", "1", "-i", str(source), "-frames:v", "1",
-            "-vf", "scale=480:-2", str(destination),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", "1", "-i", str(source), "-frames:v", "1",
+                "-vf", "scale=480:-2", str(destination),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        destination.unlink(missing_ok=True)
+        return False
     return result.returncode == 0 and destination.exists() and destination.stat().st_size > 0
