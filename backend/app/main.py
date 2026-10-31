@@ -11,13 +11,13 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
-from .database import MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
+from .database import EXPORT_DIR, MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
 from .schemas import (
     DiscoveryCreate, DiscoveryResponse, MediaResponse, ProjectCreate, ProjectResponse,
-    TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse,
+    TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, ExportCreate, ExportResponse,
 )
-from . import ai_discovery, transcription
+from . import ai_discovery, transcription, rendering
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -637,3 +637,128 @@ async def get_latest_discovery(asset_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail="Belum ada analisis AI untuk video ini.")
     return discovery_payload(row["id"])
+
+
+def export_payload(job_id: str) -> dict:
+    with get_connection() as connection:
+        row = connection.execute("SELECT * FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Export tidak ditemukan.")
+    payload = dict(row)
+    payload["download_url"] = (
+        f"/api/exports/{job_id}/file" if row["status"] == "completed" else None
+    )
+    return payload
+
+
+def run_export_job(job_id: str, source_path: str, destination_path: str) -> None:
+    def update_progress(value: float) -> None:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE export_jobs SET progress=?, updated_at=? WHERE id=? AND status='processing'",
+                (max(0.0, min(0.99, value)), now_iso(), job_id),
+            )
+
+    try:
+        with get_connection() as connection:
+            job = connection.execute(
+                "SELECT * FROM export_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if job is None:
+                return
+            connection.execute(
+                "UPDATE export_jobs SET status='processing', updated_at=? WHERE id=?",
+                (now_iso(), job_id),
+            )
+        result = rendering.render_clip(
+            Path(source_path), Path(destination_path),
+            float(job["start_seconds"]), float(job["end_seconds"]),
+            job["aspect_ratio"], progress=update_progress,
+        )
+        with get_connection() as connection:
+            connection.execute(
+                """UPDATE export_jobs SET status='completed', progress=1,
+                   encoder=?, error=NULL, updated_at=? WHERE id=?""",
+                (result["encoder"], now_iso(), job_id),
+            )
+    except Exception as error:
+        Path(destination_path).unlink(missing_ok=True)
+        with get_connection() as connection:
+            connection.execute(
+                """UPDATE export_jobs SET status='failed', error=?, updated_at=?
+                   WHERE id=?""",
+                (str(error)[:3000], now_iso(), job_id),
+            )
+
+
+@app.post("/api/media/{asset_id}/exports", response_model=ExportResponse, status_code=202)
+async def start_export(
+    asset_id: str,
+    background_tasks: BackgroundTasks,
+    payload: ExportCreate,
+):
+    if payload.end_seconds <= payload.start_seconds:
+        raise HTTPException(status_code=422, detail="Titik akhir harus lebih besar dari titik awal.")
+    try:
+        rendering.available_encoder()
+    except rendering.RenderError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    with get_connection() as connection:
+        media = connection.execute(
+            "SELECT * FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+    if media is None:
+        raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
+    if media["duration"] is not None and payload.end_seconds > float(media["duration"]) + 0.05:
+        raise HTTPException(status_code=422, detail="Titik akhir melewati durasi video sumber.")
+    source_path = MEDIA_DIR / media["stored_name"]
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail="File video sumber tidak ditemukan.")
+    job_id = str(uuid.uuid4())
+    output_name = f"clip-{job_id}.mp4"
+    destination = EXPORT_DIR / output_name
+    timestamp = now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """INSERT INTO export_jobs(
+                id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
+                created_at,updated_at
+            ) VALUES(?,?,'queued',?,?,?,?,?,?)""",
+            (
+                job_id, asset_id, payload.start_seconds, payload.end_seconds,
+                payload.aspect_ratio, output_name, timestamp, timestamp,
+            ),
+        )
+    background_tasks.add_task(run_export_job, job_id, str(source_path), str(destination))
+    return export_payload(job_id)
+
+
+@app.get("/api/exports", response_model=list[ExportResponse])
+async def list_exports():
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT id FROM export_jobs ORDER BY created_at DESC LIMIT 100"
+        ).fetchall()
+    return [export_payload(row["id"]) for row in rows]
+
+
+@app.get("/api/exports/{job_id}", response_model=ExportResponse)
+async def get_export(job_id: str):
+    return export_payload(job_id)
+
+
+@app.get("/api/exports/{job_id}/file")
+async def download_export(job_id: str):
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM export_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Export tidak ditemukan.")
+    if row["status"] != "completed":
+        raise HTTPException(status_code=409, detail="File export belum siap diunduh.")
+    path = EXPORT_DIR / row["output_name"]
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="File hasil export tidak ditemukan.")
+    return FileResponse(path, media_type="video/mp4", filename=row["output_name"])
