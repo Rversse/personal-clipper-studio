@@ -27,6 +27,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
+        working-directory: backend
       - name: Run backend tests
         run: pytest -q
         working-directory: backend
