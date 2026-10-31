@@ -26,11 +26,13 @@
 - [x] 9:16, 16:9, and 1:1 export framing controls
 - [x] Transcript text editing and visual subtitle presets
 - [x] Optional FFmpeg ASS subtitle burn-in with edited transcript text
-- [ ] Multi-clip timeline, rendered split segments, and crop repositioning
+- [x] Ordered multi-clip sequence with per-clip trim ranges and reorder/remove controls
+- [x] FFmpeg sequence assembly with optional subtitle burn-in
+- [ ] Visual multi-track timeline and crop repositioning
 - [ ] Safe context-aware clip boundaries
 
 ## Phase 5 — rendering and delivery (partial)
-- [x] Single-clip FFmpeg H.264 MP4 render pipeline with atomic output replacement
+- [x] Single-clip and ordered multi-clip FFmpeg H.264 MP4 render pipeline with atomic output replacement
 - [x] NVENC attempt with automatic libx264 CPU fallback on encoder failure
 - [x] Persistent export job records, status endpoint, history, and completed-file download
 - [ ] True multi-item batch scheduling, live progress, cancellation, and crash recovery
