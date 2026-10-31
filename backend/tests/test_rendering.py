@@ -116,3 +116,25 @@ def test_export_api_rejects_range_outside_source(tmp_path, monkeypatch):
         )
         assert response.status_code == 422
         assert "durasi video sumber" in response.json()["detail"]
+
+
+def test_nvenc_runtime_failure_retries_with_cpu_and_replaces_atomically(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(rendering.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(rendering, "available_encoder", lambda _: "h264_nvenc")
+    attempts = []
+
+    def fake_execute(command, duration, progress):
+        attempts.append(command)
+        if "h264_nvenc" in command:
+            raise rendering.RenderError("NVENC device unavailable")
+        Path(command[-1]).write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(rendering, "_execute", fake_execute)
+    result = rendering.render_clip(source, destination, 0, 20, "16:9")
+    assert result["encoder"] == "libx264"
+    assert len(attempts) == 2
+    assert destination.is_file()
+    assert not (tmp_path / "final.partial.mp4").exists()
