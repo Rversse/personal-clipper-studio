@@ -67,6 +67,10 @@ function App() {
   const [cropY, setCropY] = useState(0.5);
   const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
+  const [subtitleFontSize, setSubtitleFontSize] = useState(52);
+  const [subtitlePosition, setSubtitlePosition] = useState(8);
+  const [subtitleOutline, setSubtitleOutline] = useState(2);
+  const [subtitleBackground, setSubtitleBackground] = useState(0);
   const [burnSubtitles, setBurnSubtitles] = useState(false);
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const [clipSequence, setClipSequence] = useState<ClipSegment[]>([]);
@@ -223,6 +227,7 @@ function App() {
           crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY,
           burn_subtitles: burnSubtitles,
           subtitle_preset: subtitlePreset,
+          subtitle_style: { font_size: subtitleFontSize, vertical_position: subtitlePosition, outline_width: subtitleOutline, background_opacity: subtitleBackground },
           subtitle_segments: burnSubtitles ? selectedSubtitles.map(segment => {
             const index = subtitleSource.indexOf(segment);
             return { start: segment.start, end: segment.end, text: index >= 0 ? (subtitleText[index] ?? segment.text) : segment.text };
@@ -326,12 +331,16 @@ function App() {
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
-        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; cropZoom?: number; cropX?: number; cropY?: number };
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; cropZoom?: number; cropX?: number; cropY?: number; subtitleFontSize?: number; subtitlePosition?: number; subtitleOutline?: number; subtitleBackground?: number };
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
         setSubtitleText(parsed.texts ?? {});
         setSubtitlePreset(parsed.preset ?? "clean");
+        setSubtitleFontSize(Math.max(24, Math.min(120, parsed.subtitleFontSize ?? 52)));
+        setSubtitlePosition(Math.max(5, Math.min(30, parsed.subtitlePosition ?? 8)));
+        setSubtitleOutline(Math.max(0, Math.min(8, parsed.subtitleOutline ?? 2)));
+        setSubtitleBackground(Math.max(0, Math.min(90, parsed.subtitleBackground ?? 0)));
         setSplitPoints(parsed.splits ?? []);
         setClipSequence(Array.isArray(parsed.sequence) ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start) : []);
         setCropZoom(Math.max(1, Math.min(3, parsed.cropZoom ?? 1)));
@@ -346,11 +355,13 @@ function App() {
         setAspectRatio("9:16");
         setCropZoom(1); setCropX(0.5); setCropY(0.5);
         setSubtitlePreset("clean");
+        setSubtitleFontSize(52); setSubtitlePosition(8); setSubtitleOutline(2); setSubtitleBackground(0);
       }
     } catch {
       setEditStart(0);
       setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
       setSubtitleText({});
+      setSubtitleFontSize(52); setSubtitlePosition(8); setSubtitleOutline(2); setSubtitleBackground(0);
       setSplitPoints([]);
       setClipSequence([]);
       setCropZoom(1); setCropX(0.5); setCropY(0.5);
@@ -373,7 +384,7 @@ function App() {
   function saveEditorDraft() {
     if (!aiMediaId || editEnd <= editStart) return;
     localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
-      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, cropZoom, cropX, cropY
+      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, cropZoom, cropX, cropY, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
     }));
     setEditorSaved(true);
     window.setTimeout(() => setEditorSaved(false), 2400);
@@ -545,7 +556,13 @@ function App() {
               {!aiMediaId || !transcription?.segments?.length ? <div className="empty-panel ai-empty"><strong>Belum ada transkrip yang siap diedit</strong><p>Pilih video dan selesaikan transkripsi di AI Workspace terlebih dahulu.</p><button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Buka AI Workspace <ArrowRight size={14}/></button></div> :
               <div className="subtitle-layout">
                 <div className="subtitle-toolbar"><label>Subtitle preset<select value={subtitlePreset} onChange={e=>setSubtitlePreset(e.target.value)}><option value="clean">Clean · minimal</option><option value="bold">Bold · high contrast</option><option value="highlight">Highlight · creator style</option></select></label><label className="subtitle-burn-toggle"><input type="checkbox" checked={burnSubtitles} onChange={e=>setBurnSubtitles(e.target.checked)}/> Burn subtitles into exported video</label><span>{visibleSubtitleSegments.length} baris dalam rentang klip</span><button className="primary-button" onClick={saveEditorDraft}>Save subtitle edits</button></div>
-                <div className={"subtitle-sample " + subtitlePreset}><span>{visibleSubtitleSegments.length ? (subtitleText[transcription.segments.indexOf(visibleSubtitleSegments[0])] ?? visibleSubtitleSegments[0].text) : "Preview subtitle"}</span></div>
+                <div className="subtitle-style-controls">
+                  <label><span>Ukuran font <output>{subtitleFontSize}px</output></span><input type="range" min="24" max="120" step="1" value={subtitleFontSize} onChange={e=>setSubtitleFontSize(Number(e.target.value))}/></label>
+                  <label><span>Posisi dari bawah <output>{subtitlePosition}%</output></span><input type="range" min="5" max="30" step="1" value={subtitlePosition} onChange={e=>setSubtitlePosition(Number(e.target.value))}/></label>
+                  <label><span>Ketebalan outline <output>{subtitleOutline.toFixed(1)}</output></span><input type="range" min="0" max="8" step="0.5" value={subtitleOutline} onChange={e=>setSubtitleOutline(Number(e.target.value))}/></label>
+                  <label><span>Opasitas background <output>{subtitleBackground}%</output></span><input type="range" min="0" max="90" step="5" value={subtitleBackground} onChange={e=>setSubtitleBackground(Number(e.target.value))}/></label>
+                </div>
+                <div className={"subtitle-sample " + subtitlePreset} style={{alignItems:"end",paddingBottom:String(subtitlePosition)+"%"}}><span style={{fontSize:String(Math.max(12,Math.round(subtitleFontSize*0.36)))+"px",WebkitTextStroke:String(Math.min(2,subtitleOutline*0.25))+"px #000",backgroundColor:subtitleBackground?"rgba(0,0,0,"+(subtitleBackground/100)+")":"transparent",padding:subtitleBackground?"5px 9px":undefined}}>{visibleSubtitleSegments.length ? (subtitleText[transcription.segments.indexOf(visibleSubtitleSegments[0])] ?? visibleSubtitleSegments[0].text) : "Preview subtitle"}</span></div>
                 <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=transcription.segments!.indexOf(segment);return <div className="subtitle-row" key={segment.start + "-" + index}><button className="subtitle-time" onClick={()=>seekPreview(segment.start)}>{formatTimestamp(segment.start)}</button><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(segment.start)}/></div>})}</div>
                 <p className="editor-disclaimer">Subtitle yang dikoreksi dan preset akan ikut dirender saat opsi burn-in diaktifkan. Tanpa opsi tersebut, video diekspor tanpa subtitle tertanam.</p>
               </div>}
