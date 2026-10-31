@@ -86,6 +86,32 @@ function App() {
   }, [active, aiProjectId, projects, loadMedia]);
 
   useEffect(() => {
+    if (!aiMediaId) return;
+    let cancelled = false;
+    const restoreLatestJobs = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/transcriptions/latest`);
+        if (response.ok) {
+          const status = await response.json() as Transcription;
+          if (status.status === "completed") {
+            const detail = await fetch(`${API_BASE}/api/transcriptions/${status.id}`);
+            if (detail.ok && !cancelled) setTranscription(await detail.json() as Transcription);
+            else if (!cancelled) setTranscription(status);
+          } else if (!cancelled) {
+            setTranscription(status);
+          }
+        }
+      } catch { /* No previous transcription is a normal first-run state. */ }
+      try {
+        const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/discovery/latest`);
+        if (response.ok && !cancelled) setDiscovery(await response.json() as Discovery);
+      } catch { /* No previous discovery is a normal first-run state. */ }
+    };
+    void restoreLatestJobs();
+    return () => { cancelled = true; };
+  }, [aiMediaId]);
+
+  useEffect(() => {
     if (!transcription || !["queued", "processing"].includes(transcription.status)) return;
     let cancelled = false;
     let timer: number | undefined;
