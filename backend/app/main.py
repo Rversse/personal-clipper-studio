@@ -14,8 +14,8 @@ from fastapi.responses import FileResponse, Response
 from .database import MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
 from .schemas import (
-    DiscoveryCreate, DiscoveryResponse, MediaResponse,
-    ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse,
+    DiscoveryCreate, DiscoveryResponse, MediaResponse, ProjectCreate, ProjectResponse,
+    TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse,
 )
 from . import ai_discovery, transcription
 
@@ -582,3 +582,15 @@ async def start_discovery(
 @app.get("/api/discovery/{job_id}", response_model=DiscoveryResponse)
 async def get_discovery(job_id: str):
     return discovery_payload(job_id)
+
+
+
+@app.get("/api/transcriptions/{job_id}/status", response_model=TranscriptionStatusResponse)
+async def get_transcription_status(job_id: str):
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM transcription_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
+    return dict(row)
