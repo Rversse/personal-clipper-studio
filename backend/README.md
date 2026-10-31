@@ -46,3 +46,15 @@ The first transcription downloads the selected Whisper model into the local mode
 - Set the source language with the transcription request (for example, `id` for Indonesian); leave it empty for language detection.
 - Transcription runs locally. Job status and timestamped transcript segments are stored in SQLite.
 - CUDA acceleration depends on a compatible NVIDIA driver and CUDA/cuDNN runtime for the installed CTranslate2 build. CPU remains the fallback.
+
+
+## AI clip discovery
+
+AI discovery analyzes saved transcript segments; it does not upload the source video. It supports two providers:
+
+- **Gemini (default):** set `PCS_GEMINI_API_KEY`; optionally set `PCS_GEMINI_MODEL` (default `gemini-3.8-flash`). Requests use the Gemini Interactions API with structured JSON output and `store=false`.
+- **Ollama:** install and start Ollama locally, pull a model that supports JSON-schema output, then set `PCS_AI_PROVIDER=ollama`; optionally set `PCS_OLLAMA_URL` (default `http://127.0.0.1:11434`) and `PCS_OLLAMA_MODEL` (default `qwen3:8b`).
+
+Configuration is read from the backend process environment. API keys are never written to SQLite or returned by the API. Do not put secrets in frontend environment variables or commit them to the repository.
+
+The discovery endpoint requires a completed transcription. It analyzes transcript chunks sequentially with overlap, validates returned timestamps against real transcript segment boundaries, enforces the requested 15–180 second duration range, filters malformed/low-quality results, and deduplicates overlapping candidates. Discovery jobs and candidate metadata are stored locally in SQLite.
