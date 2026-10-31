@@ -367,6 +367,10 @@ def normalize_candidate(
 
     start_segment = min(chunk, key=lambda item: abs(float(item["start"]) - target_start))
     end_segment = min(chunk, key=lambda item: abs(float(item["end"]) - target_end))
+    if abs(float(start_segment["start"]) - target_start) > 5:
+        return None
+    if abs(float(end_segment["end"]) - target_end) > 5:
+        return None
     start_seconds = float(start_segment["start"])
     end_seconds = float(end_segment["end"])
     duration = end_seconds - start_seconds
@@ -459,7 +463,29 @@ def run_discovery_job(job_id: str) -> None:
                 accepted.append(candidate)
 
             with get_connection() as connection:
+                existing_rows = connection.execute(
+                    "SELECT start_seconds,end_seconds FROM clip_candidates WHERE discovery_job_id=?",
+                    (job_id,),
+                ).fetchall()
+                existing_ranges = [
+                    (float(row["start_seconds"]), float(row["end_seconds"]))
+                    for row in existing_rows
+                ]
                 for candidate in accepted:
+                    candidate_duration = candidate["end_seconds"] - candidate["start_seconds"]
+                    is_duplicate = False
+                    for existing_start, existing_end in existing_ranges:
+                        overlap = max(
+                            0.0,
+                            min(candidate["end_seconds"], existing_end)
+                            - max(candidate["start_seconds"], existing_start),
+                        )
+                        shorter = min(candidate_duration, existing_end - existing_start)
+                        if shorter > 0 and overlap / shorter >= 0.7:
+                            is_duplicate = True
+                            break
+                    if is_duplicate:
+                        continue
                     connection.execute(
                         """INSERT OR IGNORE INTO clip_candidates(
                             id,discovery_job_id,start_seconds,end_seconds,title,hook,
