@@ -46,6 +46,9 @@ def provider_settings() -> dict[str, str]:
         raise DiscoveryProviderError("Provider AI tidak dikenal. Pilih gemini atau ollama.")
     if provider == "gemini":
         api_key = os.environ.get("PCS_GEMINI_API_KEY", "").strip()
+        model = os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
+        if not model:
+            raise DiscoveryProviderError("PCS_GEMINI_MODEL tidak boleh kosong.")
         if not api_key:
             raise DiscoveryProviderError(
                 "Gemini API key belum dikonfigurasi. Set PCS_GEMINI_API_KEY di environment lokal."
@@ -53,13 +56,13 @@ def provider_settings() -> dict[str, str]:
         return {
             "provider": provider,
             "api_key": api_key,
-            "model": os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip(),
+            "model": model,
         }
-    return {
-        "provider": provider,
-        "url": os.environ.get("PCS_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
-        "model": os.environ.get("PCS_OLLAMA_MODEL", "qwen3:8b").strip(),
-    }
+    model = os.environ.get("PCS_OLLAMA_MODEL", "qwen3:8b").strip()
+    url = os.environ.get("PCS_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+    if not model or not url:
+        raise DiscoveryProviderError("PCS_OLLAMA_MODEL dan PCS_OLLAMA_URL harus diisi.")
+    return {"provider": provider, "url": url, "model": model}
 
 
 def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int = 180) -> dict:
@@ -84,7 +87,7 @@ def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], ti
 
 
 def _extract_json(text: str) -> dict[str, Any]:
-    cleaned = text.strip()
+    cleaned = re.sub(r"<think>.*?</think>", "", text.strip(), flags=re.DOTALL).strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^\`\`\`(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*\`\`\`$", "", cleaned)
