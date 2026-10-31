@@ -497,9 +497,9 @@ def test_execute_reports_live_progress_while_ffmpeg_runs(monkeypatch):
     class FakeProcess:
         def __init__(self, **kwargs):
             self.stdout = io.StringIO(
-                "frame=10\\nout_time_ms=200000\\nprogress=continue\\n"
-                "frame=25\\nout_time_ms=650000\\nprogress=continue\\n"
-                "out_time_ms=1000000\\nprogress=end\\n"
+                "frame=10\nout_time_ms=200000\nprogress=continue\n"
+                "frame=25\nout_time_ms=650000\nprogress=continue\n"
+                "out_time_ms=1000000\nprogress=end\n"
             )
             self.returncode = 0
 
