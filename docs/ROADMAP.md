@@ -24,8 +24,9 @@
 ## Phase 4 — editing and subtitles (partial)
 - [x] Single-clip trim range, split markers, and local edit draft
 - [x] 9:16, 16:9, and 1:1 export framing controls
-- [x] Transcript text editing and visual subtitle presets (draft only)
-- [ ] Multi-clip timeline, rendered split segments, crop repositioning, and burned-in subtitles
+- [x] Transcript text editing and visual subtitle presets
+- [x] Optional FFmpeg ASS subtitle burn-in with edited transcript text
+- [ ] Multi-clip timeline, rendered split segments, and crop repositioning
 - [ ] Safe context-aware clip boundaries
 
 ## Phase 5 — rendering and delivery (partial)
@@ -33,7 +34,8 @@
 - [x] NVENC attempt with automatic libx264 CPU fallback on encoder failure
 - [x] Persistent export job records, status endpoint, history, and completed-file download
 - [ ] True multi-item batch scheduling, live progress, cancellation, and crash recovery
-- [ ] Burned-in subtitle rendering and advanced Shorts / Reels export presets
+- [x] Burned-in subtitle rendering with Clean, Bold, and Highlight presets
+- [ ] Advanced Shorts / Reels export presets
 
 ## Phase 6 — hardening
 - [ ] Error recovery and cancellation
