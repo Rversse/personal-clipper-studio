@@ -70,7 +70,7 @@ def test_export_api_persists_job_and_serves_completed_file(tmp_path, monkeypatch
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
 
-    def fake_render(source, destination, start, end, ratio, progress=None):
+    def fake_render(source, destination, start, end, ratio, progress=None, **kwargs):
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"x" * 2048)
         if progress:
@@ -138,3 +138,83 @@ def test_nvenc_runtime_failure_retries_with_cpu_and_replaces_atomically(tmp_path
     assert len(attempts) == 2
     assert destination.is_file()
     assert not (tmp_path / "final.partial.mp4").exists()
+
+
+
+def test_ass_subtitles_are_clipped_and_escaped():
+    content = rendering.build_ass_content(
+        [
+            {"start": 8.5, "end": 12, "text": "Hello {world}\nNext line"},
+            {"start": 30, "end": 35, "text": "Outside clip"},
+        ],
+        10, 20, "bold", "9:16",
+    )
+    assert "PlayResX: 1080" in content
+    assert "PlayResY: 1920" in content
+    assert "Fontsize" in content
+    assert "Dialogue: 0,0:00:00.00,0:00:02.00" in content
+    assert r"\{world\}" in content
+    assert r"\NNext line" in content
+    assert "Outside clip" not in content
+
+
+def test_ass_subtitles_reject_invalid_timestamps_and_preset():
+    for segments, preset in [
+        ([{"start": 5, "end": 5, "text": "bad"}], "clean"),
+        ([{"start": float("nan"), "end": 8, "text": "bad"}], "clean"),
+        ([], "unknown"),
+    ]:
+        try:
+            rendering.build_ass_content(segments, 0, 10, preset)
+        except rendering.RenderError:
+            pass
+        else:
+            raise AssertionError("Invalid subtitle data must be rejected")
+
+
+def test_render_command_adds_subtitle_filter(tmp_path):
+    subtitle = tmp_path / "captions.ass"
+    command = rendering.build_render_command(
+        tmp_path / "source.mp4", tmp_path / "output.mp4", 0, 10,
+        "9:16", "libx264", subtitle_path=subtitle, subtitle_preset="highlight",
+    )
+    video_filter = command[command.index("-vf") + 1]
+    assert "subtitles=filename=" in video_filter
+    assert "captions.ass" in video_filter
+    assert "PrimaryColour=&H0000FFFF" in video_filter
+
+
+def test_render_subtitle_requires_libass_and_cleans_temp_file(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(rendering.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(rendering, "available_encoder", lambda _: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda _: True)
+    attempts = []
+
+    def fake_execute(command, duration, progress):
+        attempts.append(command)
+        Path(command[-1]).write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(rendering, "_execute", fake_execute)
+    rendering.render_clip(
+        source, destination, 0, 10, "9:16",
+        subtitle_segments=[{"start": 1, "end": 3, "text": "Caption"}],
+        subtitle_preset="clean",
+    )
+    assert len(attempts) == 1
+    assert "subtitles=filename=" in attempts[0][attempts[0].index("-vf") + 1]
+    assert not list(tmp_path.glob("*.ass"))
+    assert not list(tmp_path.glob(".*.ass"))
+
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda _: False)
+    try:
+        rendering.render_clip(
+            source, destination, 0, 10, "9:16",
+            subtitle_segments=[{"start": 1, "end": 3, "text": "Caption"}],
+        )
+    except rendering.RenderError as error:
+        assert "libass" in str(error)
+    else:
+        raise AssertionError("Missing libass must fail explicitly")
