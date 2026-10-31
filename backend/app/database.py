@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
@@ -69,9 +70,6 @@ def ensure_storage() -> None:
             CREATE INDEX IF NOT EXISTS idx_transcript_job ON transcript_segments(job_id);
             """
         )
-
-
-from contextlib import contextmanager
 
 
 @contextmanager
