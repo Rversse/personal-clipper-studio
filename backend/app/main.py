@@ -594,3 +594,46 @@ async def get_transcription_status(job_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
     return dict(row)
+
+
+
+@app.get(
+    "/api/media/{asset_id}/transcriptions/latest",
+    response_model=TranscriptionStatusResponse,
+)
+async def get_latest_transcription(asset_id: str):
+    with get_connection() as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
+        row = connection.execute(
+            """SELECT * FROM transcription_jobs
+               WHERE media_id=? ORDER BY created_at DESC LIMIT 1""",
+            (asset_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Belum ada transkripsi untuk video ini.")
+    return dict(row)
+
+
+@app.get(
+    "/api/media/{asset_id}/discovery/latest",
+    response_model=DiscoveryResponse,
+)
+async def get_latest_discovery(asset_id: str):
+    with get_connection() as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
+        row = connection.execute(
+            """SELECT id FROM discovery_jobs
+               WHERE media_id=? ORDER BY created_at DESC LIMIT 1""",
+            (asset_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Belum ada analisis AI untuk video ini.")
+    return discovery_payload(row["id"])
