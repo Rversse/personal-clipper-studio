@@ -78,6 +78,8 @@ def test_export_api_persists_job_and_serves_completed_file(tmp_path, monkeypatch
         return {"encoder": "libx264", "output": str(destination)}
 
     monkeypatch.setattr(rendering, "render_clip", fake_render)
+    real_run_export_job = main_module.run_export_job
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
     with TestClient(app) as client:
         media_id = seed_media()
         response = client.post(
@@ -86,10 +88,17 @@ def test_export_api_persists_job_and_serves_completed_file(tmp_path, monkeypatch
         )
         assert response.status_code == 202
         job = response.json()
+        assert job["status"] == "queued"
+        job_id = job["id"]
+        real_run_export_job(
+            job_id, str(database.MEDIA_DIR / "source.mp4"),
+            str(database.EXPORT_DIR / job["output_name"])
+        )
+        job = client.get(f"/api/exports/{job_id}").json()
         assert job["status"] == "completed"
         assert job["progress"] == 1
         assert job["encoder"] == "libx264"
-        assert client.get(f"/api/exports/{job['id']}").json()["id"] == job["id"]
+        assert job["id"] == job_id
         download = client.get(job["download_url"])
         assert download.status_code == 200
         assert len(download.content) == 2048
