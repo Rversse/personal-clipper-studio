@@ -10,6 +10,8 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
 type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
+type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
+type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string}[] };
 
 const navItems = [
   { label: "Overview", icon: Gauge },
@@ -43,6 +45,17 @@ function App() {
   const [projectDescription, setProjectDescription] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
+  const [aiProjectId, setAiProjectId] = useState("");
+  const [aiMediaId, setAiMediaId] = useState("");
+  const [whisperModel, setWhisperModel] = useState("small");
+  const [whisperLanguage, setWhisperLanguage] = useState("id");
+  const [transcription, setTranscription] = useState<Transcription | null>(null);
+  const [discovery, setDiscovery] = useState<Discovery | null>(null);
+  const [discoveryMode, setDiscoveryMode] = useState("auto");
+  const [discoveryCategory, setDiscoveryCategory] = useState("podcast");
+  const [minDuration, setMinDuration] = useState(30);
+  const [maxDuration, setMaxDuration] = useState(60);
+  const [aiBusy, setAiBusy] = useState(false);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -65,6 +78,59 @@ function App() {
       setError(e instanceof Error ? e.message : "Terjadi kesalahan.");
     } finally { setLoading(false); }
   }, []);
+
+  useEffect(() => {
+    if (active !== "AI Workspace" || !aiProjectId) return;
+    const project = projects.find(item => item.id === aiProjectId);
+    if (project) void loadMedia(project);
+  }, [active, aiProjectId, projects, loadMedia]);
+
+  useEffect(() => {
+    if (!transcription || !["queued", "processing"].includes(transcription.status)) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}/status`);
+        if (!response.ok) throw new Error("Gagal memeriksa status transkripsi.");
+        const status = await response.json() as Transcription;
+        if (cancelled) return;
+        setTranscription(previous => previous ? { ...previous, ...status } : status);
+        if (status.status === "completed") {
+          const detail = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}`);
+          if (detail.ok && !cancelled) setTranscription(await detail.json() as Transcription);
+        } else if (status.status === "queued" || status.status === "processing") {
+          timer = window.setTimeout(poll, 1800);
+        }
+      } catch {
+        if (!cancelled) timer = window.setTimeout(poll, 3000);
+      }
+    };
+    void poll();
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+  }, [transcription?.id, transcription?.status]);
+
+  useEffect(() => {
+    if (!discovery || !["queued", "processing"].includes(discovery.status)) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/discovery/${discovery.id}`);
+        if (!response.ok) throw new Error("Gagal memeriksa status analisis AI.");
+        const result = await response.json() as Discovery;
+        if (cancelled) return;
+        setDiscovery(result);
+        if (result.status === "queued" || result.status === "processing") {
+          timer = window.setTimeout(poll, 2200);
+        }
+      } catch {
+        if (!cancelled) timer = window.setTimeout(poll, 3000);
+      }
+    };
+    void poll();
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+  }, [discovery?.id, discovery?.status]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -109,8 +175,51 @@ function App() {
     } finally { setUploading(false); }
   }
 
+  async function startTranscription() {
+    if (!aiMediaId) return;
+    setAiBusy(true); setError(""); setDiscovery(null); setTranscription(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/transcription`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_name: whisperModel, language: whisperLanguage || null })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Gagal memulai transkripsi.");
+      setTranscription(body as Transcription);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal memulai transkripsi.");
+    } finally { setAiBusy(false); }
+  }
+
+  async function startDiscovery() {
+    if (!aiMediaId || !transcription || transcription.status !== "completed") return;
+    setAiBusy(true); setError(""); setDiscovery(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/discovery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcription_id: transcription.id, mode: discoveryMode,
+          category: discoveryMode === "category" ? discoveryCategory : null,
+          min_duration: minDuration, max_duration: maxDuration
+        })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Gagal memulai AI discovery.");
+      setDiscovery(body as Discovery);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal memulai AI discovery.");
+    } finally { setAiBusy(false); }
+  }
+
   function openProject(project: Project) {
     setSelected(project); setActive("Projects"); void loadMedia(project);
+  }
+
+  function formatTimestamp(seconds: number) {
+    const total = Math.max(0, Math.floor(seconds));
+    return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
   }
 
   return (
