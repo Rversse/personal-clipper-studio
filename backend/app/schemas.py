@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from typing import Literal\n\nfrom pydantic import BaseModel, Field
 
 
 class ProjectCreate(BaseModel):
@@ -55,5 +55,49 @@ class TranscriptionResponse(BaseModel):
     progress: float
     error: str | None = None
     segments: list[TranscriptSegment] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+
+class DiscoveryCreate(BaseModel):
+    transcription_id: str
+    mode: Literal["auto", "category"] = "auto"
+    category: Literal[
+        "podcast", "gaming", "education", "motivation",
+        "comedy", "news", "storytelling", "custom",
+    ] | None = None
+    min_duration: int = Field(default=30, ge=15, le=180)
+    max_duration: int = Field(default=60, ge=15, le=180)
+
+
+class ClipCandidateResponse(BaseModel):
+    id: str
+    discovery_job_id: str
+    start_seconds: float
+    end_seconds: float
+    title: str
+    hook: str
+    summary: str
+    rationale: str
+    score: int
+    category: str
+    created_at: str
+
+
+class DiscoveryResponse(BaseModel):
+    id: str
+    media_id: str
+    transcription_id: str
+    status: str
+    provider: str
+    model_name: str
+    mode: str
+    category: str | None = None
+    min_duration: int
+    max_duration: int
+    progress: float
+    error: str | None = None
+    candidates: list[ClipCandidateResponse] = Field(default_factory=list)
     created_at: str
     updated_at: str
