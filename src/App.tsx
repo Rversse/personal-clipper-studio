@@ -285,6 +285,11 @@ function App() {
   }, [aiMediaId, media]);
 
   useEffect(() => {
+    if (editEnd > 0 || !transcription?.segments?.length) return;
+    setEditEnd(transcription.duration ?? transcription.segments[transcription.segments.length - 1].end);
+  }, [transcription?.id, transcription?.duration, transcription?.segments?.length, editEnd]);
+
+  useEffect(() => {
     if (!editorCandidate) return;
     setEditStart(editorCandidate.start_seconds);
     setEditEnd(editorCandidate.end_seconds);
@@ -382,7 +387,7 @@ function App() {
               <div className="editor-layout">
                 <div className="editor-preview-panel">
                   <div className="editor-panel-head"><div><strong>Preview monitor</strong><small>{media.find(item=>item.id===aiMediaId)?.original_name}</small></div><span className="editor-live-tag">SOURCE PREVIEW</span></div>
-                  <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onLoadedMetadata={e=>{if(editStart>0)e.currentTarget.currentTime=editStart;}} /></div>
+                  <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onLoadedMetadata={e=>{if(editEnd<=0&&Number.isFinite(e.currentTarget.duration))setEditEnd(e.currentTarget.duration);if(editStart>0)e.currentTarget.currentTime=editStart;}} /></div>
                   <div className="preview-actions"><button className="secondary-button" onClick={()=>seekPreview(editStart)}>Play from in</button><button className="secondary-button" onClick={()=>seekPreview(editEnd)}>Go to out</button></div>
                   <div className="timeline-panel"><div className="timeline-heading"><strong>Clip range</strong><span>{formatDuration(editorDuration)}</span></div>
                     <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/>{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><b key={point} className="timeline-split" style={{left:(((point-editStart)/editorDuration)*100)+"%"}}/>)}</div>
@@ -396,7 +401,7 @@ function App() {
                 </div>
                 <aside className="editor-settings">
                   <div className="editor-panel-head"><div><strong>Clip settings</strong><small>Basic edit controls</small></div></div>
-                  <label>AI candidate<select value={editorCandidateId} onChange={e=>setEditorCandidateId(e.target.value)}><option value="">Manual / full source</option>{(discovery?.candidates ?? []).map(c=><option key={c.id} value={c.id}>{c.title} · {c.score}/100</option>)}</select></label>
+                  <label>AI candidate<select value={editorCandidateId} onChange={e=>{setEditorCandidateId(e.target.value);if(!e.target.value){setEditStart(0);setEditEnd(media.find(item=>item.id===aiMediaId)?.duration ?? transcription?.duration ?? 0);}}}><option value="">Manual / full source</option>{(discovery?.candidates ?? []).map(c=><option key={c.id} value={c.id}>{c.title} · {c.score}/100</option>)}</select></label>
                   <label>Aspect ratio<select value={aspectRatio} onChange={e=>setAspectRatio(e.target.value)}><option value="9:16">9:16 · Shorts / Reels</option><option value="16:9">16:9 · Landscape</option><option value="1:1">1:1 · Square</option></select></label>
                   <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
                   <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
