@@ -703,6 +703,9 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
             job_data["aspect_ratio"], progress=update_progress,
             subtitle_segments=json.loads(subtitle_payload) if subtitle_payload else None,
             subtitle_preset=job_data.get("subtitle_preset") or "clean",
+            crop_zoom=float(job_data.get("crop_zoom") or 1.0),
+            crop_x=float(job_data.get("crop_x") if job_data.get("crop_x") is not None else 0.5),
+            crop_y=float(job_data.get("crop_y") if job_data.get("crop_y") is not None else 0.5),
         )
         with get_connection() as connection:
             connection.execute(
@@ -774,14 +777,14 @@ async def start_export(
         connection.execute(
             """INSERT INTO export_jobs(
                 id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
-                subtitle_payload,subtitle_preset,clip_segments,created_at,updated_at
-            ) VALUES(?,?,'queued',?,?,?,?,?,?,?,?,?)""",
+                subtitle_payload,subtitle_preset,clip_segments,crop_zoom,crop_x,crop_y,created_at,updated_at
+            ) VALUES(?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 job_id, asset_id,
                 min(segment["start"] for segment in clip_segments),
                 max(segment["end"] for segment in clip_segments),
                 payload.aspect_ratio, output_name, subtitle_payload,
-                payload.subtitle_preset, clip_payload, timestamp, timestamp,
+                payload.subtitle_preset, clip_payload, payload.crop_zoom, payload.crop_x, payload.crop_y, timestamp, timestamp,
             ),
         )
     background_tasks.add_task(run_export_job, job_id, str(source_path), str(destination))
