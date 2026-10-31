@@ -61,7 +61,7 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
         "analyze_transcript_chunk",
         lambda *args, **kwargs: [{
             "start_seconds": 1,
-            "end_seconds": 55,
+            "end_seconds": 56,
             "title": "Contoh klip",
             "hook": "Ini bagian pembuka yang menarik",
             "summary": "Ringkasan dari transkrip.",
