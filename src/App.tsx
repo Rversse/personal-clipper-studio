@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, AudioLines, Clapperboard,
   Clock3, FolderOpen, Gauge, Layers3, Plus, Settings2, Sparkles, Upload,
@@ -56,6 +56,17 @@ function App() {
   const [minDuration, setMinDuration] = useState(30);
   const [maxDuration, setMaxDuration] = useState(60);
   const [aiBusy, setAiBusy] = useState(false);
+  const [editorCandidateId, setEditorCandidateId] = useState("");
+  const [editStart, setEditStart] = useState(0);
+  const [editEnd, setEditEnd] = useState(0);
+  const [aspectRatio, setAspectRatio] = useState("9:16");
+  const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
+  const [subtitlePreset, setSubtitlePreset] = useState("clean");
+  const [editorSaved, setEditorSaved] = useState(false);
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const editorCandidate = discovery?.candidates.find(item => item.id === editorCandidateId) ?? discovery?.candidates[0];
+  const editorDuration = Math.max(0, editEnd - editStart);
+  const visibleSubtitleSegments = (transcription?.segments ?? []).filter(segment => segment.end > editStart && segment.start < editEnd);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -242,6 +253,55 @@ function App() {
     } finally { setAiBusy(false); }
   }
 
+  useEffect(() => {
+    if (!aiMediaId) return;
+    try {
+      const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
+      if (saved) {
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string };
+        setEditStart(parsed.start ?? 0);
+        setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
+        setAspectRatio(parsed.ratio ?? "9:16");
+        setSubtitleText(parsed.texts ?? {});
+        setSubtitlePreset(parsed.preset ?? "clean");
+      } else {
+        setEditStart(0);
+        setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
+        setSubtitleText({});
+        setAspectRatio("9:16");
+        setSubtitlePreset("clean");
+      }
+    } catch {
+      setEditStart(0);
+      setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
+      setSubtitleText({});
+    }
+    setEditorCandidateId("");
+    setEditorSaved(false);
+  }, [aiMediaId, media]);
+
+  useEffect(() => {
+    if (!editorCandidate) return;
+    setEditStart(editorCandidate.start_seconds);
+    setEditEnd(editorCandidate.end_seconds);
+  }, [editorCandidate?.id]);
+
+  function saveEditorDraft() {
+    if (!aiMediaId || editEnd <= editStart) return;
+    localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
+      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset
+    }));
+    setEditorSaved(true);
+    window.setTimeout(() => setEditorSaved(false), 2400);
+  }
+
+  function seekPreview(seconds: number) {
+    if (previewRef.current) {
+      previewRef.current.currentTime = seconds;
+      void previewRef.current.play();
+    }
+  }
+
   function openProject(project: Project) {
     setSelected(project); setActive("Projects"); void loadMedia(project);
   }
@@ -305,6 +365,46 @@ function App() {
                 <p className="ai-provider-note">Provider AI dikonfigurasi di backend. Gemini mengirim teks transkrip saja dengan penyimpanan interaksi dinonaktifkan; Ollama dapat berjalan sepenuhnya lokal.</p>
               </>}
             </section>
+          ) : active === "Clip Editor" ? (
+            <section className="editor-view">
+              <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> CLIP EDITING</div><h1>Clip Editor.</h1><p className="welcome-copy">Pilih kandidat AI, rapikan batas klip, dan tentukan format video.</p></div></div>
+              {!aiMediaId || !media.some(item => item.id === aiMediaId) ? <div className="empty-panel ai-empty"><strong>Pilih video dari AI Workspace</strong><p>Pilih project dan source video di AI Workspace terlebih dahulu.</p><button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Buka AI Workspace <ArrowRight size={14}/></button></div> :
+              <div className="editor-layout">
+                <div className="editor-preview-panel">
+                  <div className="editor-panel-head"><div><strong>Preview monitor</strong><small>{media.find(item=>item.id===aiMediaId)?.original_name}</small></div><span className="editor-live-tag">SOURCE PREVIEW</span></div>
+                  <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onLoadedMetadata={e=>{if(editStart>0)e.currentTarget.currentTime=editStart;}} /></div>
+                  <div className="preview-actions"><button className="secondary-button" onClick={()=>seekPreview(editStart)}>Play from in</button><button className="secondary-button" onClick={()=>seekPreview(editEnd)}>Go to out</button></div>
+                  <div className="timeline-panel"><div className="timeline-heading"><strong>Clip range</strong><span>{formatDuration(editorDuration)}</span></div>
+                    <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/></div>
+                    <div className="trim-grid">
+                      <label>In point (seconds)<input type="number" min="0" step="0.1" value={editStart} onChange={e=>setEditStart(Math.max(0,Math.min(Number(e.target.value),editEnd-0.1)))}/></label>
+                      <label>Out point (seconds)<input type="number" min={editStart+0.1} step="0.1" value={editEnd} onChange={e=>setEditEnd(Math.max(editStart+0.1,Number(e.target.value)))}/></label>
+                    </div>
+                  </div>
+                </div>
+                <aside className="editor-settings">
+                  <div className="editor-panel-head"><div><strong>Clip settings</strong><small>Basic edit controls</small></div></div>
+                  <label>AI candidate<select value={editorCandidateId} onChange={e=>setEditorCandidateId(e.target.value)}><option value="">Manual / full source</option>{(discovery?.candidates ?? []).map(c=><option key={c.id} value={c.id}>{c.title} · {c.score}/100</option>)}</select></label>
+                  <label>Aspect ratio<select value={aspectRatio} onChange={e=>setAspectRatio(e.target.value)}><option value="9:16">9:16 · Shorts / Reels</option><option value="16:9">16:9 · Landscape</option><option value="1:1">1:1 · Square</option></select></label>
+                  <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
+                  <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
+                  <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save editing draft</button>
+                  {editorSaved && <small className="save-confirmation">Draft tersimpan di perangkat ini.</small>}
+                  <p className="editor-disclaimer">Pengaturan edit tersimpan lokal. Rendering dan crop/reposition masuk ke Phase 5.</p>
+                </aside>
+              </div>}
+            </section>
+          ) : active === "Subtitle Studio" ? (
+            <section className="subtitle-view">
+              <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> CAPTION DESIGN</div><h1>Subtitle Studio.</h1><p className="welcome-copy">Koreksi hasil Whisper dan atur gaya subtitle sebelum rendering.</p></div></div>
+              {!aiMediaId || !transcription?.segments?.length ? <div className="empty-panel ai-empty"><strong>Belum ada transkrip yang siap diedit</strong><p>Pilih video dan selesaikan transkripsi di AI Workspace terlebih dahulu.</p><button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Buka AI Workspace <ArrowRight size={14}/></button></div> :
+              <div className="subtitle-layout">
+                <div className="subtitle-toolbar"><label>Subtitle preset<select value={subtitlePreset} onChange={e=>setSubtitlePreset(e.target.value)}><option value="clean">Clean · minimal</option><option value="bold">Bold · high contrast</option><option value="highlight">Highlight · creator style</option></select></label><span>{visibleSubtitleSegments.length} baris dalam rentang klip</span><button className="primary-button" onClick={saveEditorDraft}>Save subtitle edits</button></div>
+                <div className={"subtitle-sample " + subtitlePreset}><span>{visibleSubtitleSegments.length ? (subtitleText[transcription.segments.indexOf(visibleSubtitleSegments[0])] ?? visibleSubtitleSegments[0].text) : "Preview subtitle"}</span></div>
+                <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=transcription.segments!.indexOf(segment);return <div className="subtitle-row" key={segment.start + "-" + index}><button className="subtitle-time" onClick={()=>seekPreview(segment.start)}>{formatTimestamp(segment.start)}</button><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(segment.start)}/></div>})}</div>
+                <p className="editor-disclaimer">Perubahan subtitle dan preset disimpan sebagai draft lokal. Timing kata dan burn-in dilakukan pada tahap rendering.</p>
+              </div>}
+            </section>
           ) : active === "Projects" ? (
             <section className="projects-view">
               <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> PROJECT LIBRARY</div><h1>{selected ? selected.name : "Your projects."}</h1><p className="welcome-copy">{selected ? "Kelola video sumber dan aset proyek ini." : "Semua video dan pekerjaan clipping tersimpan di sini."}</p></div><div className="heading-actions">{selected && <button className="secondary-button" onClick={() => { setSelected(null); setMedia([]); }}>All projects</button>}<button className="primary-button" onClick={() => setModalOpen(true)}><Plus size={17} /> New project</button></div></div>
@@ -329,7 +429,7 @@ function App() {
               <section className="bottom-grid"><div className="empty-panel"><div className="panel-heading"><h3>Recent projects</h3><span className="muted-label">LATEST ACTIVITY</span></div>{projects.length ? <div className="recent-list">{projects.slice(0,4).map(p=><button key={p.id} onClick={()=>openProject(p)}><FolderOpen size={16}/><span><strong>{p.name}</strong><small>{p.media_count} video source</small></span><ArrowRight size={14}/></button>)}</div> : <div className="empty-state"><div className="empty-icon"><Archive size={21}/></div><strong>No projects yet</strong><p>Your projects will show up here after you import a video.</p><button className="subtle-button" onClick={()=>{setActive("Projects");setModalOpen(true);}}>Create first project <ArrowRight size={14}/></button></div>}</div><div className="pipeline-panel"><div className="panel-heading"><h3>Workflow</h3><span className="muted-label">4 SIMPLE STEPS</span></div>{[["01","Import video","Bring in a local video file"],["02","Find moments","AI discovers clip candidates"],["03","Fine-tune","Edit framing, cuts and captions"],["04","Export clips","Render for Shorts and Reels"]].map(([n,t,d])=><div className="pipeline-step" key={n}><span className="step-number">{n}</span><div><strong>{t}</strong><small>{d}</small></div><ArrowRight size={14}/></div>)}</div></section>
             </>
           )}
-          <footer><span>PERSONAL CLIPPER STUDIO <b>•</b> PHASE 3 BUILD</span><span>LOCAL-FIRST BY DESIGN</span></footer>
+          <footer><span>PERSONAL CLIPPER STUDIO <b>•</b> PHASE 4 BUILD</span><span>LOCAL-FIRST BY DESIGN</span></footer>
         </div>
       </main>
       {modalOpen && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModalOpen(false);}}><form className="project-modal" onSubmit={createProject}><div className="modal-heading"><div><span className="eyebrow">NEW WORKSPACE</span><h2>Create project</h2></div><button type="button" className="icon-button" onClick={()=>setModalOpen(false)}><X size={17}/></button></div><label>Project name<input autoFocus maxLength={120} value={projectName} onChange={e=>setProjectName(e.target.value)} placeholder="Contoh: Podcast Episode 01" required/></label><label>Description <span className="optional-label">OPTIONAL</span><textarea maxLength={2000} rows={3} value={projectDescription} onChange={e=>setProjectDescription(e.target.value)} placeholder="Catatan singkat tentang video atau project ini..."/></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={()=>setModalOpen(false)}>Cancel</button><button className="primary-button" type="submit"><Plus size={15}/> Create project</button></div></form></div>}
