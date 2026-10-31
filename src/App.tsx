@@ -11,6 +11,7 @@ type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
 type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
+type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string}[] };
 
 const navItems = [
@@ -64,6 +65,8 @@ function App() {
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const [editorSaved, setEditorSaved] = useState(false);
+  const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
+  const [exportBusy, setExportBusy] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
   const editorCandidate = editorCandidateId ? discovery?.candidates.find(item => item.id === editorCandidateId) : undefined;
   const editorDuration = Math.max(0, editEnd - editStart);
@@ -172,6 +175,41 @@ function App() {
     void poll();
     return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
   }, [discovery?.id, discovery?.status]);
+
+  const loadExports = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/exports`);
+      if (response.ok) setExportJobs(await response.json() as ExportJob[]);
+    } catch { /* Export history remains available when the local API reconnects. */ }
+  }, []);
+
+  useEffect(() => {
+    if (active !== "Export Center") return;
+    void loadExports();
+    const timer = window.setInterval(() => void loadExports(), 2500);
+    return () => window.clearInterval(timer);
+  }, [active, loadExports]);
+
+  async function startExport() {
+    if (!aiMediaId || editEnd <= editStart) return;
+    setExportBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/exports`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_seconds: editStart, end_seconds: editEnd, aspect_ratio: aspectRatio })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Gagal memulai export.");
+      setExportJobs(previous => [body as ExportJob, ...previous.filter(job => job.id !== body.id)]);
+      setActive("Export Center");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal memulai export.");
+    } finally {
+      setExportBusy(false);
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -406,6 +444,7 @@ function App() {
                   <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
                   <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
                   <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save editing draft</button>
+                  <button className="secondary-button editor-save" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting export..." : "Render this clip"} <ArrowDownToLine size={14}/></button>
                   {editorSaved && <small className="save-confirmation">Draft tersimpan di perangkat ini.</small>}
                   <p className="editor-disclaimer">Pengaturan edit tersimpan lokal. Rendering dan crop/reposition masuk ke Phase 5.</p>
                 </aside>
@@ -421,6 +460,17 @@ function App() {
                 <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=transcription.segments!.indexOf(segment);return <div className="subtitle-row" key={segment.start + "-" + index}><button className="subtitle-time" onClick={()=>seekPreview(segment.start)}>{formatTimestamp(segment.start)}</button><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(segment.start)}/></div>})}</div>
                 <p className="editor-disclaimer">Perubahan subtitle dan preset disimpan sebagai draft lokal. Timing kata dan burn-in dilakukan pada tahap rendering.</p>
               </div>}
+            </section>
+          ) : active === "Export Center" ? (
+            <section className="export-view">
+              <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> RENDER & DELIVERY</div><h1>Export Center.</h1><p className="welcome-copy">Render klip ke MP4 H.264 untuk Shorts, Reels, dan format lainnya.</p></div><button className="secondary-button" onClick={()=>void loadExports()}><RefreshCw size={14}/> Refresh</button></div>
+              {error && <div className="error-banner">{error}</div>}
+              <div className="export-create-panel">
+                <div><strong>Export current edit</strong><p>Gunakan source video dan rentang yang sedang dipilih di Clip Editor.</p></div>
+                {aiMediaId && media.some(item=>item.id===aiMediaId) ? <div className="export-config"><span>{media.find(item=>item.id===aiMediaId)?.original_name}</span><span>{formatTimestamp(editStart)} – {formatTimestamp(editEnd)} · {aspectRatio}</span><button className="primary-button" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting..." : "Render MP4"} <ArrowDownToLine size={14}/></button></div> : <button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Pilih source di AI Workspace <ArrowRight size={14}/></button>}
+              </div>
+              <div className="export-list-heading"><div><h3>Export history</h3><p>100 pekerjaan terbaru dari perangkat ini</p></div><span>{exportJobs.length} jobs</span></div>
+              {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{formatTimestamp(job.start_seconds)} – {formatTimestamp(job.end_seconds)} · {job.aspect_ratio} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
             </section>
           ) : active === "Projects" ? (
             <section className="projects-view">
