@@ -77,7 +77,7 @@ def test_export_api_persists_job_and_serves_completed_file(tmp_path, monkeypatch
             progress(0.5)
         return {"encoder": "libx264", "output": str(destination)}
 
-    monkeypatch.setattr(rendering, "render_clip", fake_render)
+    monkeypatch.setattr(rendering, "render_sequence", lambda source, destination, segments, ratio, progress=None, **kwargs: fake_render(source, destination, segments[0]["start"], segments[-1]["end"], ratio, progress, **kwargs))
     real_run_export_job = main_module.run_export_job
     monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
     with TestClient(app) as client:
@@ -272,3 +272,57 @@ def test_export_api_rejects_burn_in_without_segments(tmp_path, monkeypatch):
         )
         assert response.status_code == 422
         assert "Tidak ada segmen subtitle" in response.json()["detail"]
+
+
+
+def test_render_sequence_renders_in_order_and_cleans_intermediates(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(rendering.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    calls = []
+
+    def fake_render(source_path, output_path, start, end, ratio, progress=None, **kwargs):
+        calls.append((start, end, output_path))
+        output_path.write_bytes(b"x" * 2048)
+        if progress:
+            progress(1.0)
+        return {"encoder": "libx264", "output": str(output_path)}
+
+    def fake_concat(command, **kwargs):
+        assert command[command.index("-f") + 1] == "concat"
+        list_path = Path(command[command.index("-i") + 1])
+        entries = list_path.read_text(encoding="utf-8").splitlines()
+        assert len(entries) == 2
+        Path(command[-1]).write_bytes(b"y" * 4096)
+        class Result:
+            returncode = 0
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(rendering, "render_clip", fake_render)
+    monkeypatch.setattr(rendering.subprocess, "run", fake_concat)
+    progress_values = []
+    result = rendering.render_sequence(
+        source, destination,
+        [{"start": 30, "end": 40}, {"start": 5, "end": 15}],
+        "9:16", progress=progress_values.append,
+    )
+    assert [(item[0], item[1]) for item in calls] == [(30, 40), (5, 15)]
+    assert result["encoder"] == "libx264"
+    assert destination.is_file()
+    assert progress_values[-1] == 1.0
+    assert not list(tmp_path.glob(".*-part-*.mp4"))
+    assert not list(tmp_path.glob("*.ffconcat"))
+
+
+def test_render_sequence_rejects_invalid_clip_ranges(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    for clips in [[], [{"start": 2, "end": 2}], [{"start": -1, "end": 2}]]:
+        try:
+            rendering.render_sequence(source, tmp_path / "out.mp4", clips, "9:16")
+        except rendering.RenderError:
+            pass
+        else:
+            raise AssertionError("Invalid sequence must be rejected")
