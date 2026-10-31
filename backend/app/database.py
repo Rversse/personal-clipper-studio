@@ -110,6 +110,8 @@ def ensure_storage() -> None:
                 end_seconds REAL NOT NULL,
                 aspect_ratio TEXT NOT NULL,
                 output_name TEXT NOT NULL,
+                subtitle_payload TEXT,
+                subtitle_preset TEXT NOT NULL DEFAULT 'clean',
                 encoder TEXT,
                 progress REAL NOT NULL DEFAULT 0,
                 error TEXT,
@@ -120,6 +122,11 @@ def ensure_storage() -> None:
             CREATE INDEX IF NOT EXISTS idx_export_status ON export_jobs(status);
             """
         )
+        export_columns = {row["name"] for row in connection.execute("PRAGMA table_info(export_jobs)").fetchall()}
+        if "subtitle_payload" not in export_columns:
+            connection.execute("ALTER TABLE export_jobs ADD COLUMN subtitle_payload TEXT")
+        if "subtitle_preset" not in export_columns:
+            connection.execute("ALTER TABLE export_jobs ADD COLUMN subtitle_preset TEXT NOT NULL DEFAULT 'clean'")
 
 
 @contextmanager
