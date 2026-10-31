@@ -11,7 +11,8 @@ type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
 type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
-type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
+type ClipSegment = { start: number; end: number };
+type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string}[] };
 
 const navItems = [
@@ -65,6 +66,7 @@ function App() {
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
   const [burnSubtitles, setBurnSubtitles] = useState(false);
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
+  const [clipSequence, setClipSequence] = useState<ClipSegment[]>([]);
   const [editorSaved, setEditorSaved] = useState(false);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [exportBusy, setExportBusy] = useState(false);
@@ -196,6 +198,11 @@ function App() {
 
   async function startExport() {
     if (!aiMediaId || editEnd <= editStart) return;
+    const selectedClips = clipSequence.length ? clipSequence : [{ start: editStart, end: editEnd }];
+    const subtitleSource = transcription?.media_id === aiMediaId ? transcription.segments ?? [] : [];
+    const selectedSubtitles = subtitleSource.filter(segment =>
+      selectedClips.some(clip => segment.end > clip.start && segment.start < clip.end)
+    );
     setExportBusy(true);
     setError("");
     try {
@@ -203,13 +210,14 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          start_seconds: editStart,
-          end_seconds: editEnd,
+          start_seconds: Math.min(...selectedClips.map(clip => clip.start)),
+          end_seconds: Math.max(...selectedClips.map(clip => clip.end)),
+          clip_segments: selectedClips,
           aspect_ratio: aspectRatio,
           burn_subtitles: burnSubtitles,
           subtitle_preset: subtitlePreset,
-          subtitle_segments: burnSubtitles ? visibleSubtitleSegments.map(segment => {
-            const index = transcription?.segments?.indexOf(segment) ?? -1;
+          subtitle_segments: burnSubtitles ? selectedSubtitles.map(segment => {
+            const index = subtitleSource.indexOf(segment);
             return { start: segment.start, end: segment.end, text: index >= 0 ? (subtitleText[index] ?? segment.text) : segment.text };
           }) : []
         })
@@ -311,18 +319,20 @@ function App() {
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
-        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[] };
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[] };
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
         setSubtitleText(parsed.texts ?? {});
         setSubtitlePreset(parsed.preset ?? "clean");
         setSplitPoints(parsed.splits ?? []);
+        setClipSequence(Array.isArray(parsed.sequence) ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start) : []);
       } else {
         setEditStart(0);
         setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
         setSubtitleText({});
         setSplitPoints([]);
+        setClipSequence([]);
         setAspectRatio("9:16");
         setSubtitlePreset("clean");
       }
@@ -331,6 +341,7 @@ function App() {
       setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
       setSubtitleText({});
       setSplitPoints([]);
+      setClipSequence([]);
     }
     setEditorCandidateId("");
     setEditorSaved(false);
@@ -350,7 +361,7 @@ function App() {
   function saveEditorDraft() {
     if (!aiMediaId || editEnd <= editStart) return;
     localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
-      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints
+      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence
     }));
     setEditorSaved(true);
     window.setTimeout(() => setEditorSaved(false), 2400);
@@ -360,6 +371,21 @@ function App() {
     const point = previewRef.current?.currentTime;
     if (point === undefined || point <= editStart || point >= editEnd) return;
     setSplitPoints(previous => [...previous, point].sort((a,b)=>a-b).filter((value,index,array)=>index===0 || value-array[index-1]>0.25));
+  }
+
+  function addCurrentRangeToSequence() {
+    if (editEnd <= editStart || clipSequence.length >= 100) return;
+    setClipSequence(previous => [...previous, { start: editStart, end: editEnd }]);
+  }
+
+  function moveSequenceClip(index: number, direction: -1 | 1) {
+    setClipSequence(previous => {
+      const target = index + direction;
+      if (target < 0 || target >= previous.length) return previous;
+      const next = [...previous];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   }
 
   function seekPreview(seconds: number) {
@@ -445,6 +471,12 @@ function App() {
                     <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/>{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><b key={point} className="timeline-split" style={{left:(((point-editStart)/editorDuration)*100)+"%"}}/>)}</div>
                     <div className="split-toolbar"><button className="secondary-button" onClick={addSplitPoint}>Split at playhead</button><span>{splitPoints.filter(point=>point>editStart&&point<editEnd).length} split point</span></div>
                     {splitPoints.filter(point=>point>editStart&&point<editEnd).length>0 && <div className="split-list">{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><button key={point} onClick={()=>setSplitPoints(previous=>previous.filter(item=>item!==point))}>{formatTimestamp(point)} <X size={11}/></button>)}</div>}
+                    <div className="sequence-panel">
+                      <div className="sequence-heading"><strong>Render sequence</strong><span>{clipSequence.length} clips · {formatDuration(clipSequence.reduce((sum,clip)=>sum+clip.end-clip.start,0))}</span></div>
+                      <button className="secondary-button sequence-add" onClick={addCurrentRangeToSequence} disabled={editEnd<=editStart||clipSequence.length>=100}>Add current range to sequence <Plus size={13}/></button>
+                      {clipSequence.length>0 ? <ol className="sequence-list">{clipSequence.map((clip,index)=><li key={index}><span><b>{String(index+1).padStart(2,"0")}</b>{formatTimestamp(clip.start)} – {formatTimestamp(clip.end)}<small>{formatDuration(clip.end-clip.start)}</small></span><div><button aria-label="Move clip up" title="Move up" disabled={index===0} onClick={()=>moveSequenceClip(index,-1)}>↑</button><button aria-label="Move clip down" title="Move down" disabled={index===clipSequence.length-1} onClick={()=>moveSequenceClip(index,1)}>↓</button><button aria-label="Remove clip" title="Remove" onClick={()=>setClipSequence(previous=>previous.filter((_,i)=>i!==index))}><X size={12}/></button></div></li>)}</ol> : <p className="sequence-empty">Belum ada urutan khusus. Render akan menggunakan rentang aktif.</p>}
+                      {clipSequence.length>0 && <button className="sequence-clear" onClick={()=>setClipSequence([])}>Clear sequence</button>}
+                    </div>
                     <div className="trim-grid">
                       <label>In point (seconds)<input type="number" min="0" step="0.1" value={editStart} onChange={e=>setEditStart(Math.max(0,Math.min(Number(e.target.value),editEnd-0.1)))}/></label>
                       <label>Out point (seconds)<input type="number" min={editStart+0.1} step="0.1" value={editEnd} onChange={e=>setEditEnd(Math.max(editStart+0.1,Number(e.target.value)))}/></label>
@@ -458,7 +490,7 @@ function App() {
                   <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
                   <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
                   <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save editing draft</button>
-                  <button className="secondary-button editor-save" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting export..." : "Render this clip"} <ArrowDownToLine size={14}/></button>
+                  <button className="secondary-button editor-save" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting export..." : clipSequence.length ? `Render ${clipSequence.length} clips` : "Render this clip"} <ArrowDownToLine size={14}/></button>
                   {editorSaved && <small className="save-confirmation">Draft tersimpan di perangkat ini.</small>}
                   <p className="editor-disclaimer">Pengaturan edit tersimpan lokal. Rendering dan crop/reposition masuk ke Phase 5.</p>
                 </aside>
@@ -481,10 +513,10 @@ function App() {
               {error && <div className="error-banner">{error}</div>}
               <div className="export-create-panel">
                 <div><strong>Export current edit</strong><p>Gunakan source video dan rentang yang sedang dipilih di Clip Editor.</p></div>
-                {aiMediaId && media.some(item=>item.id===aiMediaId) ? <div className="export-config"><span>{media.find(item=>item.id===aiMediaId)?.original_name}</span><span>{formatTimestamp(editStart)} – {formatTimestamp(editEnd)} · {aspectRatio}</span><span>{burnSubtitles ? "Burn-in " + visibleSubtitleSegments.length + " subtitle · " + subtitlePreset : "Subtitle burn-in off"}</span><button className="primary-button" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting..." : "Render MP4"} <ArrowDownToLine size={14}/></button></div> : <button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Pilih source di AI Workspace <ArrowRight size={14}/></button>}
+                {aiMediaId && media.some(item=>item.id===aiMediaId) ? <div className="export-config"><span>{media.find(item=>item.id===aiMediaId)?.original_name}</span><span>{clipSequence.length ? clipSequence.length + " clips in sequence" : formatTimestamp(editStart) + " – " + formatTimestamp(editEnd)} · {aspectRatio}</span><span>{burnSubtitles ? "Burn-in " + visibleSubtitleSegments.length + " subtitle · " + subtitlePreset : "Subtitle burn-in off"}</span><button className="primary-button" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting..." : "Render MP4"} <ArrowDownToLine size={14}/></button></div> : <button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Pilih source di AI Workspace <ArrowRight size={14}/></button>}
               </div>
               <div className="export-list-heading"><div><h3>Export history</h3><p>100 pekerjaan terbaru dari perangkat ini</p></div><span>{exportJobs.length} jobs</span></div>
-              {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{formatTimestamp(job.start_seconds)} – {formatTimestamp(job.end_seconds)} · {job.aspect_ratio} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
+              {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{job.clip_count > 1 ? job.clip_count + " clips in sequence" : formatTimestamp(job.start_seconds) + " – " + formatTimestamp(job.end_seconds)} · {job.aspect_ratio} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
             </section>
           ) : active === "Projects" ? (
             <section className="projects-view">
