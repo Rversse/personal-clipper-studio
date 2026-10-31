@@ -667,6 +667,7 @@ def export_payload(job_id: str) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="Export tidak ditemukan.")
     payload = dict(row)
+    payload["clip_count"] = len(json.loads(payload["clip_segments"])) if payload.get("clip_segments") else 1
     payload["download_url"] = (
         f"/api/exports/{job_id}/file" if row["status"] == "completed" else None
     )
@@ -694,9 +695,11 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
                 (now_iso(), job_id),
             )
         subtitle_payload = job_data.get("subtitle_payload")
-        result = rendering.render_clip(
-            Path(source_path), Path(destination_path),
-            float(job_data["start_seconds"]), float(job_data["end_seconds"]),
+        clip_segments = json.loads(job_data["clip_segments"]) if job_data.get("clip_segments") else [
+            {"start": float(job_data["start_seconds"]), "end": float(job_data["end_seconds"])}
+        ]
+        result = rendering.render_sequence(
+            Path(source_path), Path(destination_path), clip_segments,
             job_data["aspect_ratio"], progress=update_progress,
             subtitle_segments=json.loads(subtitle_payload) if subtitle_payload else None,
             subtitle_preset=job_data.get("subtitle_preset") or "clean",
@@ -725,6 +728,13 @@ async def start_export(
 ):
     if payload.end_seconds <= payload.start_seconds:
         raise HTTPException(status_code=422, detail="Titik akhir harus lebih besar dari titik awal.")
+    clip_segments = [
+        {"start": segment.start, "end": segment.end}
+        for segment in payload.clip_segments
+    ] or [{"start": payload.start_seconds, "end": payload.end_seconds}]
+    for segment in clip_segments:
+        if segment["end"] <= segment["start"]:
+            raise HTTPException(status_code=422, detail="Titik akhir setiap klip harus lebih besar dari titik awal.")
     try:
         rendering.available_encoder()
         if payload.burn_subtitles and not rendering.subtitles_filter_available():
@@ -744,8 +754,10 @@ async def start_export(
         ).fetchone()
     if media is None:
         raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
-    if media["duration"] is not None and payload.end_seconds > float(media["duration"]) + 0.05:
-        raise HTTPException(status_code=422, detail="Titik akhir melewati durasi video sumber.")
+    if media["duration"] is not None and any(
+        segment["end"] > float(media["duration"]) + 0.05 for segment in clip_segments
+    ):
+        raise HTTPException(status_code=422, detail="Salah satu klip melewati durasi video sumber.")
     source_path = MEDIA_DIR / media["stored_name"]
     if not source_path.is_file():
         raise HTTPException(status_code=404, detail="File video sumber tidak ditemukan.")
@@ -757,16 +769,19 @@ async def start_export(
         [segment.model_dump() for segment in payload.subtitle_segments],
         ensure_ascii=False,
     ) if payload.burn_subtitles else None
+    clip_payload = json.dumps(clip_segments)
     with get_connection() as connection:
         connection.execute(
             """INSERT INTO export_jobs(
                 id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
-                subtitle_payload,subtitle_preset,created_at,updated_at
-            ) VALUES(?,?,'queued',?,?,?,?,?,?,?,?)""",
+                subtitle_payload,subtitle_preset,clip_segments,created_at,updated_at
+            ) VALUES(?,?,'queued',?,?,?,?,?,?,?,?,?)""",
             (
-                job_id, asset_id, payload.start_seconds, payload.end_seconds,
+                job_id, asset_id,
+                min(segment["start"] for segment in clip_segments),
+                max(segment["end"] for segment in clip_segments),
                 payload.aspect_ratio, output_name, subtitle_payload,
-                payload.subtitle_preset, timestamp, timestamp,
+                payload.subtitle_preset, clip_payload, timestamp, timestamp,
             ),
         )
     background_tasks.add_task(run_export_job, job_id, str(source_path), str(destination))
