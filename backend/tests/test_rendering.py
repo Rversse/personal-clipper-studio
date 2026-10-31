@@ -218,3 +218,57 @@ def test_render_subtitle_requires_libass_and_cleans_temp_file(tmp_path, monkeypa
         assert "libass" in str(error)
     else:
         raise AssertionError("Missing libass must fail explicitly")
+
+
+
+def test_export_api_persists_subtitle_payload_for_background_job(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda: True)
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 10,
+                "end_seconds": 40,
+                "aspect_ratio": "9:16",
+                "burn_subtitles": True,
+                "subtitle_preset": "highlight",
+                "subtitle_segments": [
+                    {"start": 12, "end": 14, "text": "Edited caption"}
+                ],
+            },
+        )
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT subtitle_payload,subtitle_preset FROM export_jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+        import json
+        assert json.loads(row["subtitle_payload"]) == [
+            {"start": 12.0, "end": 14.0, "text": "Edited caption"}
+        ]
+        assert row["subtitle_preset"] == "highlight"
+
+
+def test_export_api_rejects_burn_in_without_segments(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda: True)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 10,
+                "end_seconds": 40,
+                "burn_subtitles": True,
+                "subtitle_segments": [],
+            },
+        )
+        assert response.status_code == 422
+        assert "Tidak ada segmen subtitle" in response.json()["detail"]
