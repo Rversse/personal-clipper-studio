@@ -13,11 +13,13 @@
 - [x] Thumbnail and playback preview (FFmpeg optional; browser preview available)
 - [x] Durable media workspace
 
-## Phase 3 — transcription and AI discovery
-- [ ] Local Whisper transcription
-- [ ] Auto Discovery and Category Analysis
-- [ ] Gemini provider adapter and optional Ollama adapter
-- [ ] Candidate scoring, rationale, and timestamp review
+## Phase 3 — transcription and AI discovery (implemented; provider runtime setup required)
+- [x] Local Whisper transcription with background job status and persisted segments
+- [x] Auto Discovery and Category Analysis
+- [x] Gemini Interactions API adapter and optional Ollama adapter
+- [x] Candidate scoring, rationale, timestamp validation, and deduplication
+- [x] Responsive AI Workspace with saved job restoration
+- [ ] Live provider smoke test with a configured Gemini key or local Ollama model
 
 ## Phase 4 — editing and subtitles
 - [ ] Multi-clip timeline and trim/split
