@@ -54,6 +54,6 @@ class TranscriptionResponse(BaseModel):
     duration: float | None = None
     progress: float
     error: str | None = None
-    segments: list[TranscriptSegment] = []
+    segments: list[TranscriptSegment] = Field(default_factory=list)
     created_at: str
     updated_at: str
