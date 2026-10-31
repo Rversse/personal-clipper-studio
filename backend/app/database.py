@@ -112,6 +112,7 @@ def ensure_storage() -> None:
                 output_name TEXT NOT NULL,
                 subtitle_payload TEXT,
                 subtitle_preset TEXT NOT NULL DEFAULT 'clean',
+                clip_segments TEXT,
                 encoder TEXT,
                 progress REAL NOT NULL DEFAULT 0,
                 error TEXT,
@@ -127,6 +128,8 @@ def ensure_storage() -> None:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN subtitle_payload TEXT")
         if "subtitle_preset" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN subtitle_preset TEXT NOT NULL DEFAULT 'clean'")
+        if "clip_segments" not in export_columns:
+            connection.execute("ALTER TABLE export_jobs ADD COLUMN clip_segments TEXT")
 
 
 @contextmanager
