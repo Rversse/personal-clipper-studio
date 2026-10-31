@@ -13,8 +13,8 @@ from fastapi.responses import FileResponse, Response
 
 from .database import MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
-from .schemas import (MediaResponse, ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse)
-from . import transcription
+from .schemas import (\n    ClipCandidateResponse, DiscoveryCreate, DiscoveryResponse, MediaResponse,\n    ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse,\n)
+from . import ai_discovery, transcription
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -320,3 +320,236 @@ async def start_transcription(
 @app.get("/api/transcriptions/{job_id}", response_model=TranscriptionResponse)
 async def get_transcription(job_id: str):
     return transcription_payload(job_id)
+
+
+
+def discovery_payload(job_id: str) -> dict:
+    with get_connection() as connection:
+        job = connection.execute(
+            "SELECT * FROM discovery_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if job is None:
+            raise HTTPException(status_code=404, detail="Analisis AI tidak ditemukan.")
+        candidates = connection.execute(
+            "SELECT * FROM clip_candidates WHERE discovery_job_id=? ORDER BY score DESC, start_seconds",
+            (job_id,),
+        ).fetchall()
+    return {
+        **dict(job),
+        "candidates": [dict(candidate) for candidate in candidates],
+    }
+
+
+def normalize_candidate(
+    raw: dict,
+    chunk: list[dict],
+    min_duration: int,
+    max_duration: int,
+) -> dict | None:
+    import math
+
+    try:
+        target_start = float(raw["start_seconds"])
+        target_end = float(raw["end_seconds"])
+        score = int(raw["score"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(target_start) or not math.isfinite(target_end) or not 0 <= score <= 100:
+        return None
+    if not chunk:
+        return None
+    chunk_start = float(chunk[0]["start"])
+    chunk_end = float(chunk[-1]["end"])
+    if target_start < chunk_start - 1 or target_start > chunk_end:
+        return None
+    if target_end < chunk_start or target_end > chunk_end + 1:
+        return None
+
+    start_segment = min(chunk, key=lambda item: abs(float(item["start"]) - target_start))
+    end_segment = min(chunk, key=lambda item: abs(float(item["end"]) - target_end))
+    start_seconds = float(start_segment["start"])
+    end_seconds = float(end_segment["end"])
+    duration = end_seconds - start_seconds
+    if not min_duration <= duration <= max_duration or end_seconds <= start_seconds:
+        return None
+
+    def safe_text(field: str, limit: int) -> str:
+        value = raw.get(field)
+        return value.strip()[:limit] if isinstance(value, str) else ""
+
+    title = safe_text("title", 120)
+    hook = safe_text("hook", 240)
+    summary = safe_text("summary", 1000)
+    rationale = safe_text("rationale", 1000)
+    category = safe_text("category", 40) or "other"
+    if not title or not hook or not summary or not rationale:
+        return None
+    return {
+        "start_seconds": round(start_seconds, 3),
+        "end_seconds": round(end_seconds, 3),
+        "title": title,
+        "hook": hook,
+        "summary": summary,
+        "rationale": rationale,
+        "score": score,
+        "category": category,
+    }
+
+
+def run_discovery_job(job_id: str) -> None:
+    try:
+        with get_connection() as connection:
+            job = connection.execute(
+                "SELECT * FROM discovery_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if job is None:
+                return
+            segments = connection.execute(
+                """SELECT start,end,text FROM transcript_segments
+                   WHERE job_id=(SELECT id FROM transcription_jobs WHERE id=?)
+                   ORDER BY start""",
+                (job["transcription_id"],),
+            ).fetchall()
+        transcript = [dict(item) for item in segments]
+        if not transcript:
+            raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
+        chunks = ai_discovery.split_transcript(transcript)
+        if not chunks:
+            raise ValueError("Transkrip kosong atau tidak dapat dibagi menjadi bagian analisis.")
+
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=?",
+                (now_iso(), job_id),
+            )
+
+        for chunk_index, chunk in enumerate(chunks):
+            raw_candidates = ai_discovery.analyze_transcript_chunk(
+                chunk,
+                mode=job["mode"],
+                category=job["category"],
+                min_duration=job["min_duration"],
+                max_duration=job["max_duration"],
+            )
+            accepted: list[dict] = []
+            for raw in raw_candidates:
+                if not isinstance(raw, dict):
+                    continue
+                candidate = normalize_candidate(
+                    raw, chunk, job["min_duration"], job["max_duration"]
+                )
+                if candidate is None or candidate["score"] < 40:
+                    continue
+                duration = candidate["end_seconds"] - candidate["start_seconds"]
+                duplicate = False
+                for existing in accepted:
+                    overlap = max(
+                        0.0,
+                        min(candidate["end_seconds"], existing["end_seconds"])
+                        - max(candidate["start_seconds"], existing["start_seconds"]),
+                    )
+                    shorter = min(
+                        duration, existing["end_seconds"] - existing["start_seconds"]
+                    )
+                    if shorter > 0 and overlap / shorter >= 0.7:
+                        duplicate = True
+                        break
+                if duplicate:
+                    continue
+                accepted.append(candidate)
+
+            with get_connection() as connection:
+                for candidate in accepted:
+                    connection.execute(
+                        """INSERT OR IGNORE INTO clip_candidates(
+                            id,discovery_job_id,start_seconds,end_seconds,title,hook,
+                            summary,rationale,score,category,created_at
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            str(uuid.uuid4()), job_id, candidate["start_seconds"],
+                            candidate["end_seconds"], candidate["title"], candidate["hook"],
+                            candidate["summary"], candidate["rationale"], candidate["score"],
+                            candidate["category"], now_iso(),
+                        ),
+                    )
+                progress = (chunk_index + 1) / len(chunks)
+                connection.execute(
+                    "UPDATE discovery_jobs SET progress=?, updated_at=? WHERE id=?",
+                    (progress, now_iso(), job_id),
+                )
+
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE discovery_jobs SET status='completed', progress=1, updated_at=? WHERE id=?",
+                (now_iso(), job_id),
+            )
+    except Exception as error:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE discovery_jobs SET status='failed', error=?, updated_at=? WHERE id=?",
+                (str(error)[:2000], now_iso(), job_id),
+            )
+
+
+@app.post(
+    "/api/media/{asset_id}/discovery",
+    response_model=DiscoveryResponse,
+    status_code=202,
+)
+async def start_discovery(
+    asset_id: str,
+    background_tasks: BackgroundTasks,
+    payload: DiscoveryCreate,
+):
+    if payload.max_duration < payload.min_duration:
+        raise HTTPException(
+            status_code=422, detail="Durasi maksimal harus lebih besar atau sama dengan durasi minimal."
+        )
+    if payload.mode == "category" and not payload.category:
+        raise HTTPException(
+            status_code=422, detail="Pilih kategori untuk mode Category Analysis."
+        )
+    try:
+        settings = ai_discovery.provider_settings()
+    except ai_discovery.DiscoveryProviderError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    with get_connection() as connection:
+        media = connection.execute(
+            "SELECT id FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        if media is None:
+            raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
+        transcript = connection.execute(
+            """SELECT id,status FROM transcription_jobs
+               WHERE id=? AND media_id=?""",
+            (payload.transcription_id, asset_id),
+        ).fetchone()
+    if transcript is None:
+        raise HTTPException(status_code=404, detail="Transkrip untuk video ini tidak ditemukan.")
+    if transcript["status"] != "completed":
+        raise HTTPException(
+            status_code=409, detail="Transkripsi harus selesai sebelum analisis AI dimulai."
+        )
+
+    job_id = str(uuid.uuid4())
+    timestamp = now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """INSERT INTO discovery_jobs(
+                id,media_id,transcription_id,status,provider,model_name,mode,category,
+                min_duration,max_duration,created_at,updated_at
+            ) VALUES(?,?,?,'queued',?,?,?,?,?,?,?,?)""",
+            (
+                job_id, asset_id, payload.transcription_id, settings["provider"],
+                settings["model"], payload.mode, payload.category,
+                payload.min_duration, payload.max_duration, timestamp, timestamp,
+            ),
+        )
+    background_tasks.add_task(run_discovery_job, job_id)
+    return discovery_payload(job_id)
+
+
+@app.get("/api/discovery/{job_id}", response_model=DiscoveryResponse)
+async def get_discovery(job_id: str):
+    return discovery_payload(job_id)
