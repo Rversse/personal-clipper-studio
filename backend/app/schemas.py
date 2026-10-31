@@ -130,12 +130,20 @@ class ExportClipSegment(BaseModel):
     end: float = Field(gt=0, allow_inf_nan=False)
 
 
+class ExportSubtitleStyle(BaseModel):
+    font_size: int = Field(default=52, ge=24, le=120)
+    vertical_position: int = Field(default=8, ge=5, le=30)
+    outline_width: float = Field(default=2.0, ge=0.0, le=8.0, allow_inf_nan=False)
+    background_opacity: int = Field(default=0, ge=0, le=90)
+
+
 class ExportCreate(BaseModel):
     start_seconds: float = Field(ge=0, allow_inf_nan=False)
     end_seconds: float = Field(gt=0, allow_inf_nan=False)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     burn_subtitles: bool = False
     subtitle_preset: Literal["clean", "bold", "highlight"] = "clean"
+    subtitle_style: ExportSubtitleStyle = Field(default_factory=ExportSubtitleStyle)
     subtitle_segments: list[ExportSubtitleSegment] = Field(default_factory=list, max_length=10000)
     clip_segments: list[ExportClipSegment] = Field(default_factory=list, max_length=100)
     crop_zoom: float = Field(default=1.0, ge=1.0, le=3.0, allow_inf_nan=False)
