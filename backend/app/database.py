@@ -44,6 +44,29 @@ def ensure_storage() -> None:
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_media_project ON media_assets(project_id);
+            CREATE TABLE IF NOT EXISTS transcription_jobs (
+                id TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'queued',
+                model_name TEXT NOT NULL,
+                language TEXT,
+                detected_language TEXT,
+                language_probability REAL,
+                duration REAL,
+                progress REAL NOT NULL DEFAULT 0,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS transcript_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL REFERENCES transcription_jobs(id) ON DELETE CASCADE,
+                start REAL NOT NULL,
+                end REAL NOT NULL,
+                text TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_transcription_media ON transcription_jobs(media_id);
+            CREATE INDEX IF NOT EXISTS idx_transcript_job ON transcript_segments(job_id);
             """
         )
 
