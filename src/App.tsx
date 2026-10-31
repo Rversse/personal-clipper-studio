@@ -63,6 +63,7 @@ function App() {
   const [aspectRatio, setAspectRatio] = useState("9:16");
   const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
+  const [burnSubtitles, setBurnSubtitles] = useState(false);
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const [editorSaved, setEditorSaved] = useState(false);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
@@ -198,7 +199,17 @@ function App() {
       const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/exports`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_seconds: editStart, end_seconds: editEnd, aspect_ratio: aspectRatio })
+        body: JSON.stringify({
+          start_seconds: editStart,
+          end_seconds: editEnd,
+          aspect_ratio: aspectRatio,
+          burn_subtitles: burnSubtitles,
+          subtitle_preset: subtitlePreset,
+          subtitle_segments: burnSubtitles ? visibleSubtitleSegments.map(segment => {
+            const index = transcription?.segments?.indexOf(segment) ?? -1;
+            return { start: segment.start, end: segment.end, text: index >= 0 ? (subtitleText[index] ?? segment.text) : segment.text };
+          }) : []
+        })
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.detail ?? "Gagal memulai export.");
@@ -455,10 +466,10 @@ function App() {
               <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> CAPTION DESIGN</div><h1>Subtitle Studio.</h1><p className="welcome-copy">Koreksi hasil Whisper dan atur gaya subtitle sebelum rendering.</p></div></div>
               {!aiMediaId || !transcription?.segments?.length ? <div className="empty-panel ai-empty"><strong>Belum ada transkrip yang siap diedit</strong><p>Pilih video dan selesaikan transkripsi di AI Workspace terlebih dahulu.</p><button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Buka AI Workspace <ArrowRight size={14}/></button></div> :
               <div className="subtitle-layout">
-                <div className="subtitle-toolbar"><label>Subtitle preset<select value={subtitlePreset} onChange={e=>setSubtitlePreset(e.target.value)}><option value="clean">Clean · minimal</option><option value="bold">Bold · high contrast</option><option value="highlight">Highlight · creator style</option></select></label><span>{visibleSubtitleSegments.length} baris dalam rentang klip</span><button className="primary-button" onClick={saveEditorDraft}>Save subtitle edits</button></div>
+                <div className="subtitle-toolbar"><label>Subtitle preset<select value={subtitlePreset} onChange={e=>setSubtitlePreset(e.target.value)}><option value="clean">Clean · minimal</option><option value="bold">Bold · high contrast</option><option value="highlight">Highlight · creator style</option></select></label><label className="subtitle-burn-toggle"><input type="checkbox" checked={burnSubtitles} onChange={e=>setBurnSubtitles(e.target.checked)}/> Burn subtitles into exported video</label><span>{visibleSubtitleSegments.length} baris dalam rentang klip</span><button className="primary-button" onClick={saveEditorDraft}>Save subtitle edits</button></div>
                 <div className={"subtitle-sample " + subtitlePreset}><span>{visibleSubtitleSegments.length ? (subtitleText[transcription.segments.indexOf(visibleSubtitleSegments[0])] ?? visibleSubtitleSegments[0].text) : "Preview subtitle"}</span></div>
                 <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=transcription.segments!.indexOf(segment);return <div className="subtitle-row" key={segment.start + "-" + index}><button className="subtitle-time" onClick={()=>seekPreview(segment.start)}>{formatTimestamp(segment.start)}</button><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(segment.start)}/></div>})}</div>
-                <p className="editor-disclaimer">Perubahan subtitle dan preset disimpan sebagai draft lokal. Timing kata dan burn-in dilakukan pada tahap rendering.</p>
+                <p className="editor-disclaimer">Subtitle yang dikoreksi dan preset akan ikut dirender saat opsi burn-in diaktifkan. Tanpa opsi tersebut, video diekspor tanpa subtitle tertanam.</p>
               </div>}
             </section>
           ) : active === "Export Center" ? (
@@ -467,7 +478,7 @@ function App() {
               {error && <div className="error-banner">{error}</div>}
               <div className="export-create-panel">
                 <div><strong>Export current edit</strong><p>Gunakan source video dan rentang yang sedang dipilih di Clip Editor.</p></div>
-                {aiMediaId && media.some(item=>item.id===aiMediaId) ? <div className="export-config"><span>{media.find(item=>item.id===aiMediaId)?.original_name}</span><span>{formatTimestamp(editStart)} – {formatTimestamp(editEnd)} · {aspectRatio}</span><button className="primary-button" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting..." : "Render MP4"} <ArrowDownToLine size={14}/></button></div> : <button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Pilih source di AI Workspace <ArrowRight size={14}/></button>}
+                {aiMediaId && media.some(item=>item.id===aiMediaId) ? <div className="export-config"><span>{media.find(item=>item.id===aiMediaId)?.original_name}</span><span>{formatTimestamp(editStart)} – {formatTimestamp(editEnd)} · {aspectRatio}</span><span>{burnSubtitles ? "Burn-in " + visibleSubtitleSegments.length + " subtitle · " + subtitlePreset : "Subtitle burn-in off"}</span><button className="primary-button" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting..." : "Render MP4"} <ArrowDownToLine size={14}/></button></div> : <button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Pilih source di AI Workspace <ArrowRight size={14}/></button>}
               </div>
               <div className="export-list-heading"><div><h3>Export history</h3><p>100 pekerjaan terbaru dari perangkat ini</p></div><span>{exportJobs.length} jobs</span></div>
               {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{formatTimestamp(job.start_seconds)} – {formatTimestamp(job.end_seconds)} · {job.aspect_ratio} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
