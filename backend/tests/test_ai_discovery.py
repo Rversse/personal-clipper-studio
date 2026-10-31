@@ -93,6 +93,12 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
         assert candidate["start_seconds"] == 0
         assert candidate["end_seconds"] == 60
         assert candidate["score"] == 88
+        latest_discovery = client.get(f"/api/media/{media_id}/discovery/latest")
+        assert latest_discovery.status_code == 200
+        assert latest_discovery.json()["id"] == payload["id"]
+        latest_transcription = client.get(f"/api/media/{media_id}/transcriptions/latest")
+        assert latest_transcription.status_code == 200
+        assert latest_transcription.json()["id"] == transcript_id
 
 
 def test_discovery_requires_completed_transcript(tmp_path, monkeypatch):
