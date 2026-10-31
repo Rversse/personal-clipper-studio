@@ -288,6 +288,7 @@ def test_render_sequence_renders_in_order_and_cleans_intermediates(tmp_path, mon
 
     def fake_render(source_path, output_path, start, end, ratio, progress=None, **kwargs):
         calls.append((start, end, output_path))
+        assert kwargs["subtitle_style"] == {"font_size": 68, "vertical_position": 10, "outline_width": 3.5, "background_opacity": 35}
         output_path.write_bytes(b"x" * 2048)
         if progress:
             progress(1.0)
@@ -307,10 +308,11 @@ def test_render_sequence_renders_in_order_and_cleans_intermediates(tmp_path, mon
     monkeypatch.setattr(rendering, "render_clip", fake_render)
     monkeypatch.setattr(rendering.subprocess, "run", fake_concat)
     progress_values = []
+    subtitle_style = {"font_size": 68, "vertical_position": 10, "outline_width": 3.5, "background_opacity": 35}
     result = rendering.render_sequence(
         source, destination,
         [{"start": 30, "end": 40}, {"start": 5, "end": 15}],
-        "9:16", progress=progress_values.append,
+        "9:16", progress=progress_values.append, subtitle_style=subtitle_style,
     )
     assert [(item[0], item[1]) for item in calls] == [(30, 40), (5, 15)]
     assert result["encoder"] == "libx264"
