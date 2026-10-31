@@ -13,7 +13,10 @@ from fastapi.responses import FileResponse, Response
 
 from .database import MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
-from .schemas import (\n    ClipCandidateResponse, DiscoveryCreate, DiscoveryResponse, MediaResponse,\n    ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse,\n)
+from .schemas import (
+    DiscoveryCreate, DiscoveryResponse, MediaResponse,
+    ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse,
+)
 from . import ai_discovery, transcription
 
 @asynccontextmanager
