@@ -22,6 +22,15 @@ from . import ai_discovery, transcription, rendering
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_storage()
+    timestamp = now_iso()
+    with get_connection() as connection:
+        for table in ("transcription_jobs", "discovery_jobs", "export_jobs"):
+            connection.execute(
+                f"""UPDATE {table} SET status='failed',
+                    error='Proses terhenti karena aplikasi sebelumnya ditutup.',
+                    updated_at=? WHERE status IN ('queued','processing')""",
+                (timestamp,),
+            )
     yield
 
 
@@ -221,7 +230,19 @@ async def delete_media(asset_id: str):
         row = connection.execute("SELECT * FROM media_assets WHERE id=?", (asset_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
+        active_export = connection.execute(
+            "SELECT 1 FROM export_jobs WHERE media_id=? AND status IN ('queued','processing') LIMIT 1",
+            (asset_id,),
+        ).fetchone()
+        if active_export:
+            raise HTTPException(status_code=409, detail="Video tidak dapat dihapus saat export masih berjalan.")
+        exports = connection.execute(
+            "SELECT output_name FROM export_jobs WHERE media_id=? AND status='completed'",
+            (asset_id,),
+        ).fetchall()
         connection.execute("DELETE FROM media_assets WHERE id=?", (asset_id,))
+    for export in exports:
+        (EXPORT_DIR / export["output_name"]).unlink(missing_ok=True)
     (MEDIA_DIR / row["stored_name"]).unlink(missing_ok=True)
     if row["thumbnail_name"]:
         (THUMBNAIL_DIR / row["thumbnail_name"]).unlink(missing_ok=True)
