@@ -489,3 +489,27 @@ def test_subtitle_style_rejects_out_of_range_values(tmp_path):
             pass
         else:
             raise AssertionError("Out-of-range subtitle style must be rejected")
+
+
+def test_execute_reports_live_progress_while_ffmpeg_runs(monkeypatch):
+    import io
+
+    class FakeProcess:
+        def __init__(self, **kwargs):
+            self.stdout = io.StringIO(
+                "frame=10\\nout_time_ms=200000\\nprogress=continue\\n"
+                "frame=25\\nout_time_ms=650000\\nprogress=continue\\n"
+                "out_time_ms=1000000\\nprogress=end\\n"
+            )
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(rendering.subprocess, "Popen", lambda *args, **kwargs: FakeProcess(**kwargs))
+    updates = []
+    rendering._execute(["ffmpeg", "-progress", "pipe:1"], 2.0, updates.append)
+    assert updates == [0.1, 0.325, 0.5]
