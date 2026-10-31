@@ -164,6 +164,6 @@ def test_candidate_timestamp_validation_rejects_out_of_range():
 
 def test_provider_parser_handles_json_code_fences_and_thinking():
     parsed = ai_discovery._extract_json(
-        '<think>reasoning is not part of the response</think>\\n```json\\n{"candidates": []}\\n```'
+        '<think>reasoning is not part of the response</think>\n```json\n{"candidates": []}\n```'
     )
     assert parsed == {"candidates": []}
