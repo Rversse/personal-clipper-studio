@@ -39,9 +39,12 @@ def seed_completed_transcript():
             ) VALUES(?,?,'completed','tiny',?,?)""",
             (transcript_id, media_id, timestamp, timestamp),
         )
-        connection.execute(
+        connection.executemany(
             "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
-            (transcript_id, 0.0, 60.0, "Ini adalah contoh transkrip untuk menguji penemuan klip."),
+            [
+                (transcript_id, float(start), float(start + 10), f"Segmen transkrip {start}.")
+                for start in range(0, 60, 10)
+            ],
         )
     return media_id, transcript_id
 
@@ -57,8 +60,8 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
         ai_discovery,
         "analyze_transcript_chunk",
         lambda *args, **kwargs: [{
-            "start_seconds": 0,
-            "end_seconds": 45,
+            "start_seconds": 1,
+            "end_seconds": 55,
             "title": "Contoh klip",
             "hook": "Ini bagian pembuka yang menarik",
             "summary": "Ringkasan dari transkrip.",
