@@ -6,13 +6,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
 from .database import MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
-from .schemas import MediaResponse, ProjectCreate, ProjectResponse
+from .schemas import (MediaResponse, ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse)\nfrom . import transcription
 
 app = FastAPI(
     title="Personal Clipper Studio API",
@@ -219,3 +219,96 @@ async def delete_media(asset_id: str):
     if row["thumbnail_name"]:
         (THUMBNAIL_DIR / row["thumbnail_name"]).unlink(missing_ok=True)
     return Response(status_code=204)
+
+
+
+def transcription_payload(job_id: str) -> dict:
+    with get_connection() as connection:
+        job = connection.execute(
+            "SELECT * FROM transcription_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if job is None:
+            raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
+        segments = connection.execute(
+            "SELECT start,end,text FROM transcript_segments WHERE job_id=? ORDER BY start",
+            (job_id,),
+        ).fetchall()
+    return {
+        **dict(job),
+        "segments": [dict(segment) for segment in segments],
+    }
+
+
+def run_transcription_job(job_id: str, source_path: str) -> None:
+    def update_progress(value: float) -> None:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET progress=?, updated_at=? WHERE id=?",
+                (value, now_iso(), job_id),
+            )
+
+    try:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=?",
+                (now_iso(), job_id),
+            )
+        result = transcription.transcribe_file(Path(source_path), progress=update_progress)
+        with get_connection() as connection:
+            connection.executemany(
+                "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
+                [
+                    (job_id, item["start"], item["end"], item["text"])
+                    for item in result["segments"]
+                ],
+            )
+            connection.execute(
+                """UPDATE transcription_jobs
+                   SET status='completed', progress=1, detected_language=?,
+                       language_probability=?, duration=?, updated_at=?
+                   WHERE id=?""",
+                (
+                    result["language"], result["language_probability"],
+                    result["duration"], now_iso(), job_id,
+                ),
+            )
+    except Exception as error:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='failed', error=?, updated_at=? WHERE id=?",
+                (str(error)[:2000], now_iso(), job_id),
+            )
+
+
+@app.post(
+    "/api/media/{asset_id}/transcription",
+    response_model=TranscriptionResponse,
+    status_code=202,
+)
+async def start_transcription(
+    asset_id: str,
+    background_tasks: BackgroundTasks,
+    payload: TranscriptionCreate,
+):
+    if not transcription.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Whisper belum terpasang. Install dengan: pip install -e \"backend[transcription]\"",
+        )
+    source_path, _ = media_file(asset_id)
+    job_id = str(uuid.uuid4())
+    timestamp = now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """INSERT INTO transcription_jobs(
+                id,media_id,status,model_name,language,created_at,updated_at
+            ) VALUES(?,?,'queued',?,?,?,?)""",
+            (job_id, asset_id, payload.model_name, payload.language, timestamp, timestamp),
+        )
+    background_tasks.add_task(run_transcription_job, job_id, str(source_path))
+    return transcription_payload(job_id)
+
+
+@app.get("/api/transcriptions/{job_id}", response_model=TranscriptionResponse)
+async def get_transcription(job_id: str):
+    return transcription_payload(job_id)
