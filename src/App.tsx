@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, AudioLines, Clapperboard,
   Clock3, FolderOpen, Gauge, Layers3, Plus, Settings2, Sparkles, Upload,
-  Video, WandSparkles, X, FileVideo, RefreshCw
+  Video, WandSparkles, X, FileVideo, RefreshCw, Zap
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
