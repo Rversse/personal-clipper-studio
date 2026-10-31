@@ -9,6 +9,7 @@ from typing import Iterator
 APP_DATA_DIR = Path(os.environ.get("PCS_DATA_DIR", Path.home() / ".personal-clipper-studio")).expanduser()
 MEDIA_DIR = APP_DATA_DIR / "media"
 THUMBNAIL_DIR = APP_DATA_DIR / "thumbnails"
+EXPORT_DIR = APP_DATA_DIR / "exports"
 DATABASE_PATH = APP_DATA_DIR / "studio.sqlite3"
 
 
@@ -16,6 +17,7 @@ def ensure_storage() -> None:
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     with get_connection() as connection:
         connection.executescript(
             """
@@ -100,6 +102,22 @@ def ensure_storage() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_discovery_media ON discovery_jobs(media_id);
             CREATE INDEX IF NOT EXISTS idx_candidate_job ON clip_candidates(discovery_job_id);
+            CREATE TABLE IF NOT EXISTS export_jobs (
+                id TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'queued',
+                start_seconds REAL NOT NULL,
+                end_seconds REAL NOT NULL,
+                aspect_ratio TEXT NOT NULL,
+                output_name TEXT NOT NULL,
+                encoder TEXT,
+                progress REAL NOT NULL DEFAULT 0,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_export_media ON export_jobs(media_id);
+            CREATE INDEX IF NOT EXISTS idx_export_status ON export_jobs(status);
             """
         )
 
