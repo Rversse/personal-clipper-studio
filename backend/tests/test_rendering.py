@@ -326,3 +326,56 @@ def test_render_sequence_rejects_invalid_clip_ranges(tmp_path):
             pass
         else:
             raise AssertionError("Invalid sequence must be rejected")
+
+
+
+def test_export_api_persists_ordered_clip_sequence(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 5,
+                "end_seconds": 40,
+                "aspect_ratio": "9:16",
+                "clip_segments": [
+                    {"start": 30, "end": 40},
+                    {"start": 5, "end": 15},
+                ],
+            },
+        )
+        assert response.status_code == 202
+        job = response.json()
+        assert job["clip_count"] == 2
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT clip_segments,start_seconds,end_seconds FROM export_jobs WHERE id=?",
+                (job["id"],),
+            ).fetchone()
+        import json
+        assert json.loads(row["clip_segments"]) == [
+            {"start": 30.0, "end": 40.0},
+            {"start": 5.0, "end": 15.0},
+        ]
+        assert row["start_seconds"] == 5
+        assert row["end_seconds"] == 40
+
+
+def test_export_api_rejects_sequence_segment_outside_source(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 5,
+                "end_seconds": 40,
+                "clip_segments": [{"start": 100, "end": 130}],
+            },
+        )
+        assert response.status_code == 422
+        assert "melewati durasi" in response.json()["detail"]
