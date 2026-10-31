@@ -118,3 +118,24 @@ class TranscriptionStatusResponse(BaseModel):
     error: str | None = None
     created_at: str
     updated_at: str
+
+class ExportCreate(BaseModel):
+    start_seconds: float = Field(ge=0, allow_inf_nan=False)
+    end_seconds: float = Field(gt=0, allow_inf_nan=False)
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+
+
+class ExportResponse(BaseModel):
+    id: str
+    media_id: str
+    status: str
+    start_seconds: float
+    end_seconds: float
+    aspect_ratio: str
+    output_name: str
+    encoder: str | None = None
+    progress: float
+    error: str | None = None
+    download_url: str | None = None
+    created_at: str
+    updated_at: str
