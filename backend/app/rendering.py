@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import math
 import os
+import queue
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -200,25 +203,56 @@ def _execute(command: list[str], duration: float, progress: Callable[[float], No
                 command, stdout=subprocess.PIPE, stderr=error_log,
                 text=True, encoding="utf-8", errors="replace",
             )
+            if process.stdout is None:
+                process.kill()
+                raise RenderError("FFmpeg tidak menyediakan stream progress.")
+            events: queue.Queue[str | None] = queue.Queue()
+
+            def read_progress() -> None:
+                try:
+                    for output_line in process.stdout:
+                        events.put(output_line)
+                finally:
+                    events.put(None)
+
+            reader = threading.Thread(target=read_progress, name="ffmpeg-progress-reader", daemon=True)
+            reader.start()
+            deadline = time.monotonic() + 6 * 60 * 60
+            last_progress = 0.0
+            stream_finished = False
+            while not stream_finished:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    process.wait()
+                    raise RenderError("Rendering melewati batas waktu 6 jam.")
+                try:
+                    line = events.get(timeout=min(1.0, remaining))
+                except queue.Empty:
+                    continue
+                if line is None:
+                    stream_finished = True
+                    continue
+                if progress and line.startswith("out_time_ms="):
+                    try:
+                        elapsed = max(0.0, int(line.partition("=")[2]) / 1_000_000)
+                    except ValueError:
+                        continue
+                    current = min(0.99, max(last_progress, elapsed / duration))
+                    if current > last_progress:
+                        last_progress = current
+                        progress(current)
             try:
-                stdout, _ = process.communicate(timeout=6 * 60 * 60)
+                process.wait(timeout=max(0.01, deadline - time.monotonic()))
             except subprocess.TimeoutExpired as error:
                 process.kill()
-                process.communicate()
+                process.wait()
                 raise RenderError("Rendering melewati batas waktu 6 jam.") from error
+            reader.join(timeout=2)
             if process.returncode != 0:
                 error_log.seek(0)
                 detail = error_log.read()[-3000:]
                 raise RenderError(detail.strip() or f"FFmpeg berhenti dengan kode {process.returncode}.")
-        if progress:
-            latest_time = 0.0
-            for line in stdout.splitlines():
-                if line.startswith("out_time_ms="):
-                    try:
-                        latest_time = max(latest_time, int(line.partition("=")[2]) / 1_000_000)
-                    except ValueError:
-                        continue
-            progress(min(0.99, max(0.0, latest_time / duration)))
     except OSError as error:
         raise RenderError(f"Gagal menjalankan FFmpeg: {error}") from error
 
