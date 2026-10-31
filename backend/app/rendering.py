@@ -102,6 +102,42 @@ def available_encoder(ffmpeg: str | None = None) -> str:
     return "h264_nvenc" if result.returncode == 0 and "h264_nvenc" in result.stdout else "libx264"
 
 
+def _subtitle_force_style(preset: str, aspect_ratio: str, options: dict | None = None) -> str:
+    if preset not in SUBTITLE_STYLES or aspect_ratio not in OUTPUT_SIZES:
+        raise RenderError("Preset atau rasio subtitle tidak didukung.")
+    values = options or {}
+    try:
+        font_size = int(values.get("font_size", SUBTITLE_STYLES[preset]["size"]))
+        vertical_position = int(values.get("vertical_position", 8))
+        outline_width = float(values.get("outline_width", SUBTITLE_STYLES[preset]["border"]))
+        background_opacity = int(values.get("background_opacity", 0))
+    except (TypeError, ValueError, OverflowError) as error:
+        raise RenderError("Pengaturan gaya subtitle tidak valid.") from error
+    if (font_size < 24 or font_size > 120 or vertical_position < 5 or vertical_position > 30
+            or not math.isfinite(outline_width) or outline_width < 0 or outline_width > 8
+            or background_opacity < 0 or background_opacity > 90):
+        raise RenderError("Pengaturan gaya subtitle berada di luar batas.")
+    style = SUBTITLE_STYLES[preset]
+    margin = round(OUTPUT_SIZES[aspect_ratio][1] * vertical_position / 100)
+    if background_opacity:
+        alpha = round(255 * (1 - background_opacity / 100))
+        outline_colour = "&H{:02X}000000".format(alpha)
+        border_style = 3
+        outline_width = max(2.0, outline_width)
+    else:
+        outline_colour = style["outline"]
+        border_style = 1
+    return (
+        "FontName={font},FontSize={size},PrimaryColour={primary},"
+        "OutlineColour={outline},Bold={bold},BorderStyle={border_style},"
+        "Outline={outline_width:.1f},Shadow={shadow},Alignment=2,MarginV={margin}"
+    ).format(
+        font=style["font"], size=font_size, primary=style["primary"],
+        outline=outline_colour, bold=style["bold"], border_style=border_style,
+        outline_width=outline_width, shadow=style["shadow"], margin=margin,
+    )
+
+
 def build_render_command(
     source: Path,
     destination: Path,
@@ -115,6 +151,7 @@ def build_render_command(
     crop_zoom: float = 1.0,
     crop_x: float = 0.5,
     crop_y: float = 0.5,
+    subtitle_style: dict | None = None,
 ) -> list[str]:
     if aspect_ratio not in OUTPUT_SIZES:
         raise RenderError("Rasio aspek tidak didukung.")
@@ -135,8 +172,7 @@ def build_render_command(
     if subtitle_path is not None:
         if subtitle_preset not in SUBTITLE_STYLES:
             raise RenderError("Preset subtitle tidak didukung.")
-        style = SUBTITLE_STYLES[subtitle_preset]
-        force_style = "FontName={font},FontSize={size},PrimaryColour={primary},OutlineColour={outline},Bold={bold},BorderStyle=1,Outline={border},Shadow={shadow},Alignment=2,MarginV={margin}".format(**style)
+        force_style = _subtitle_force_style(subtitle_preset, aspect_ratio, subtitle_style)
         video_filter += ",subtitles=filename='{}':force_style='{}'".format(_escape_filter_path(subtitle_path), force_style)
     command = [
         ffmpeg, "-hide_banner", "-y", "-i", str(source),
@@ -199,6 +235,7 @@ def render_clip(
     crop_zoom: float = 1.0,
     crop_x: float = 0.5,
     crop_y: float = 0.5,
+    subtitle_style: dict | None = None,
 ) -> dict[str, str]:
     if not source.is_file():
         raise RenderError("File video sumber tidak ditemukan.")
@@ -225,7 +262,7 @@ def render_clip(
             subtitle_file.write_text(build_ass_content(subtitle_segments, start_seconds, end_seconds, subtitle_preset, aspect_ratio), encoding="utf-8-sig")
         command = build_render_command(
             source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-            subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y
+            subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, subtitle_style
         )
         try:
             _execute(command, duration, progress)
@@ -236,7 +273,7 @@ def render_clip(
             encoder = "libx264"
             cpu_command = build_render_command(
                 source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-                subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y
+                subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, subtitle_style
             )
             _execute(cpu_command, duration, progress)
         if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
@@ -263,6 +300,7 @@ def render_sequence(
     crop_zoom: float = 1.0,
     crop_x: float = 0.5,
     crop_y: float = 0.5,
+    subtitle_style: dict | None = None,
 ) -> dict[str, str]:
     if not source.is_file():
         raise RenderError("File video sumber tidak ditemukan.")
@@ -307,6 +345,7 @@ def render_sequence(
                 progress=segment_progress, subtitle_segments=subtitle_segments,
                 subtitle_preset=subtitle_preset,
                 crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
+                subtitle_style=subtitle_style,
             )
             encoders.append(result["encoder"])
             completed_duration += end - start
