@@ -126,3 +126,44 @@ def test_transcript_chunking_keeps_overlap_and_progresses():
     assert all(chunk for chunk in chunks)
     assert chunks[0][-1]["end"] > chunks[1][0]["start"]
     assert chunks[-1][-1]["end"] == segments[-1]["end"]
+
+
+def test_discovery_fails_fast_without_gemini_key(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setenv("PCS_AI_PROVIDER", "gemini")
+    monkeypatch.delenv("PCS_GEMINI_API_KEY", raising=False)
+    with TestClient(app) as client:
+        media_id, transcript_id = seed_completed_transcript()
+        response = client.post(
+            f"/api/media/{media_id}/discovery",
+            json={"transcription_id": transcript_id},
+        )
+        assert response.status_code == 503
+        assert "API key belum dikonfigurasi" in response.json()["detail"]
+
+
+def test_candidate_timestamp_validation_rejects_out_of_range():
+    from app.main import normalize_candidate
+
+    transcript = [
+        {"start": 0.0, "end": 10.0, "text": "Bagian awal."},
+        {"start": 10.0, "end": 20.0, "text": "Bagian akhir."},
+    ]
+    invalid = {
+        "start_seconds": 100,
+        "end_seconds": 150,
+        "title": "Invalid",
+        "hook": "Invalid",
+        "summary": "Invalid",
+        "rationale": "Invalid",
+        "score": 90,
+        "category": "other",
+    }
+    assert normalize_candidate(invalid, transcript, 15, 60) is None
+
+
+def test_provider_parser_handles_json_code_fences_and_thinking():
+    parsed = ai_discovery._extract_json(
+        '<think>reasoning is not part of the response</think>\\n```json\\n{"candidates": []}\\n```'
+    )
+    assert parsed == {"candidates": []}
