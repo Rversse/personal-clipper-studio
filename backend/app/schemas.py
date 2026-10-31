@@ -103,3 +103,18 @@ class DiscoveryResponse(BaseModel):
     candidates: list[ClipCandidateResponse] = Field(default_factory=list)
     created_at: str
     updated_at: str
+
+
+class TranscriptionStatusResponse(BaseModel):
+    id: str
+    media_id: str
+    status: str
+    model_name: str
+    language: str | None = None
+    detected_language: str | None = None
+    language_probability: float | None = None
+    duration: float | None = None
+    progress: float
+    error: str | None = None
+    created_at: str
+    updated_at: str
