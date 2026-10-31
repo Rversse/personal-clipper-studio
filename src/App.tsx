@@ -64,7 +64,7 @@ function App() {
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
   const [editorSaved, setEditorSaved] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
-  const editorCandidate = discovery?.candidates.find(item => item.id === editorCandidateId) ?? discovery?.candidates[0];
+  const editorCandidate = editorCandidateId ? discovery?.candidates.find(item => item.id === editorCandidateId) : undefined;
   const editorDuration = Math.max(0, editEnd - editStart);
   const visibleSubtitleSegments = (transcription?.segments ?? []).filter(segment => segment.end > editStart && segment.start < editEnd);
 
