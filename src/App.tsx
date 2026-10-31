@@ -387,6 +387,14 @@ function App() {
     setClipSequence(previous => [...previous, { start: editStart, end: editEnd }]);
   }
 
+  function addSplitRangesToSequence() {
+    const points = splitPoints.filter(point => point > editStart && point < editEnd).sort((a,b)=>a-b);
+    if (!points.length) return;
+    const boundaries = [editStart, ...points, editEnd];
+    const ranges = boundaries.slice(0, -1).map((start, index) => ({ start, end: boundaries[index + 1] }));
+    setClipSequence(previous => [...previous, ...ranges].slice(0, 100));
+  }
+
   function moveSequenceClip(index: number, direction: -1 | 1) {
     setClipSequence(previous => {
       const target = index + direction;
@@ -479,6 +487,7 @@ function App() {
                   <div className="timeline-panel"><div className="timeline-heading"><strong>Clip range</strong><span>{formatDuration(editorDuration)}</span></div>
                     <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/>{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><b key={point} className="timeline-split" style={{left:(((point-editStart)/editorDuration)*100)+"%"}}/>)}</div>
                     <div className="split-toolbar"><button className="secondary-button" onClick={addSplitPoint}>Split at playhead</button><span>{splitPoints.filter(point=>point>editStart&&point<editEnd).length} split point</span></div>
+                    {splitPoints.some(point=>point>editStart&&point<editEnd) && <button className="secondary-button sequence-add" onClick={addSplitRangesToSequence} disabled={clipSequence.length>=100}>Add split ranges to sequence</button>}
                     {splitPoints.filter(point=>point>editStart&&point<editEnd).length>0 && <div className="split-list">{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><button key={point} onClick={()=>setSplitPoints(previous=>previous.filter(item=>item!==point))}>{formatTimestamp(point)} <X size={11}/></button>)}</div>}
                     <div className="sequence-panel">
                       <div className="sequence-heading"><strong>Render sequence</strong><span>{clipSequence.length} clips · {formatDuration(clipSequence.reduce((sum,clip)=>sum+clip.end-clip.start,0))}</span></div>
