@@ -1,6 +1,6 @@
 # Roadmap
 
-## Phase 1 — foundation (in progress)
+## Phase 1 — foundation (complete)
 - [x] Initialize repository and product architecture
 - [x] React + TypeScript workspace shell
 - [x] FastAPI local health service
@@ -8,10 +8,10 @@
 - [x] Local development and packaging instructions
 
 ## Phase 2 — projects and media
-- [ ] Project creation and local project database
-- [ ] Local video import and metadata probe
-- [ ] Thumbnail and playback preview
-- [ ] Durable media workspace
+- [x] Project creation and local project database
+- [x] Local video import and metadata probe (FFprobe integration; gracefully reports unavailable)
+- [x] Thumbnail and playback preview (FFmpeg optional; browser preview available)
+- [x] Durable media workspace
 
 ## Phase 3 — transcription and AI discovery
 - [ ] Local Whisper transcription
