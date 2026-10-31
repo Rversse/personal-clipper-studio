@@ -113,6 +113,9 @@ def ensure_storage() -> None:
                 subtitle_payload TEXT,
                 subtitle_preset TEXT NOT NULL DEFAULT 'clean',
                 clip_segments TEXT,
+                crop_zoom REAL NOT NULL DEFAULT 1.0,
+                crop_x REAL NOT NULL DEFAULT 0.5,
+                crop_y REAL NOT NULL DEFAULT 0.5,
                 encoder TEXT,
                 progress REAL NOT NULL DEFAULT 0,
                 error TEXT,
@@ -130,6 +133,12 @@ def ensure_storage() -> None:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN subtitle_preset TEXT NOT NULL DEFAULT 'clean'")
         if "clip_segments" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN clip_segments TEXT")
+        if "crop_zoom" not in export_columns:
+            connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_zoom REAL NOT NULL DEFAULT 1.0")
+        if "crop_x" not in export_columns:
+            connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_x REAL NOT NULL DEFAULT 0.5")
+        if "crop_y" not in export_columns:
+            connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_y REAL NOT NULL DEFAULT 0.5")
 
 
 @contextmanager
