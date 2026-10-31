@@ -62,6 +62,7 @@ function App() {
   const [aspectRatio, setAspectRatio] = useState("9:16");
   const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
+  const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const [editorSaved, setEditorSaved] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
   const editorCandidate = editorCandidateId ? discovery?.candidates.find(item => item.id === editorCandidateId) : undefined;
@@ -258,16 +259,18 @@ function App() {
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
-        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string };
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[] };
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
         setSubtitleText(parsed.texts ?? {});
         setSubtitlePreset(parsed.preset ?? "clean");
+        setSplitPoints(parsed.splits ?? []);
       } else {
         setEditStart(0);
         setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
         setSubtitleText({});
+        setSplitPoints([]);
         setAspectRatio("9:16");
         setSubtitlePreset("clean");
       }
@@ -275,6 +278,7 @@ function App() {
       setEditStart(0);
       setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
       setSubtitleText({});
+      setSplitPoints([]);
     }
     setEditorCandidateId("");
     setEditorSaved(false);
@@ -289,10 +293,16 @@ function App() {
   function saveEditorDraft() {
     if (!aiMediaId || editEnd <= editStart) return;
     localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
-      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset
+      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints
     }));
     setEditorSaved(true);
     window.setTimeout(() => setEditorSaved(false), 2400);
+  }
+
+  function addSplitPoint() {
+    const point = previewRef.current?.currentTime;
+    if (point === undefined || point <= editStart || point >= editEnd) return;
+    setSplitPoints(previous => [...previous, point].sort((a,b)=>a-b).filter((value,index,array)=>index===0 || value-array[index-1]>0.25));
   }
 
   function seekPreview(seconds: number) {
@@ -375,7 +385,9 @@ function App() {
                   <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onLoadedMetadata={e=>{if(editStart>0)e.currentTarget.currentTime=editStart;}} /></div>
                   <div className="preview-actions"><button className="secondary-button" onClick={()=>seekPreview(editStart)}>Play from in</button><button className="secondary-button" onClick={()=>seekPreview(editEnd)}>Go to out</button></div>
                   <div className="timeline-panel"><div className="timeline-heading"><strong>Clip range</strong><span>{formatDuration(editorDuration)}</span></div>
-                    <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/></div>
+                    <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/>{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><b key={point} className="timeline-split" style={{left:(((point-editStart)/editorDuration)*100)+"%"}}/>)}</div>
+                    <div className="split-toolbar"><button className="secondary-button" onClick={addSplitPoint}>Split at playhead</button><span>{splitPoints.filter(point=>point>editStart&&point<editEnd).length} split point</span></div>
+                    {splitPoints.filter(point=>point>editStart&&point<editEnd).length>0 && <div className="split-list">{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><button key={point} onClick={()=>setSplitPoints(previous=>previous.filter(item=>item!==point))}>{formatTimestamp(point)} <X size={11}/></button>)}</div>}
                     <div className="trim-grid">
                       <label>In point (seconds)<input type="number" min="0" step="0.1" value={editStart} onChange={e=>setEditStart(Math.max(0,Math.min(Number(e.target.value),editEnd-0.1)))}/></label>
                       <label>Out point (seconds)<input type="number" min={editStart+0.1} step="0.1" value={editEnd} onChange={e=>setEditEnd(Math.max(editStart+0.1,Number(e.target.value)))}/></label>
