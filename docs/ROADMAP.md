@@ -4,8 +4,8 @@
 - [x] Initialize repository and product architecture
 - [x] React + TypeScript workspace shell
 - [x] FastAPI local health service
-- [ ] Tauri v2 native shell and Windows build configuration
-- [ ] Local development and packaging scripts
+- [x] Tauri v2 native shell and Windows build configuration
+- [x] Local development and packaging instructions
 
 ## Phase 2 — projects and media
 - [ ] Project creation and local project database
