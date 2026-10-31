@@ -39,7 +39,8 @@
 - [x] Single-clip and ordered multi-clip FFmpeg H.264 MP4 render pipeline with atomic output replacement
 - [x] NVENC attempt with automatic libx264 CPU fallback on encoder failure
 - [x] Persistent export job records, status endpoint, history, and completed-file download
-- [ ] True multi-item batch scheduling, live progress, cancellation, and crash recovery
+- [x] Live FFmpeg progress streamed into persistent export job status
+- [ ] True multi-item batch scheduling, cancellation, and crash recovery
 - [x] Burned-in subtitle rendering with Clean, Bold, and Highlight presets
 - [ ] Advanced Shorts / Reels export presets
 
