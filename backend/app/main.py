@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import mimetypes
 import os
 import uuid
@@ -15,10 +16,17 @@ from .media import create_thumbnail, probe_media
 from .schemas import (MediaResponse, ProjectCreate, ProjectResponse, TranscriptionCreate, TranscriptionResponse)
 from . import transcription
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    ensure_storage()
+    yield
+
+
 app = FastAPI(
     title="Personal Clipper Studio API",
     version="0.2.0",
     description="Local-first API for projects, media import, transcription, AI clip discovery, and exports.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -31,11 +39,6 @@ app.add_middleware(
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg"}
 MAX_UPLOAD_BYTES = int(os.environ.get("PCS_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024 * 1024)))
-
-
-@app.on_event("startup")
-def startup() -> None:
-    ensure_storage()
 
 
 def now_iso() -> str:
