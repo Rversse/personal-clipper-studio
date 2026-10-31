@@ -152,6 +152,9 @@ class ExportResponse(BaseModel):
     aspect_ratio: str
     output_name: str
     clip_count: int = 1
+    crop_zoom: float = 1.0
+    crop_x: float = 0.5
+    crop_y: float = 0.5
     encoder: str | None = None
     progress: float
     error: str | None = None
