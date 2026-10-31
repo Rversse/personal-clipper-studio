@@ -4,7 +4,7 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from app import database, transcription
+from app import database, main as main_module, transcription
 from app.main import app
 
 
@@ -12,6 +12,8 @@ def setup_test_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "APP_DATA_DIR", tmp_path)
     monkeypatch.setattr(database, "MEDIA_DIR", tmp_path / "media")
     monkeypatch.setattr(database, "THUMBNAIL_DIR", tmp_path / "thumbnails")
+    monkeypatch.setattr(main_module, "MEDIA_DIR", tmp_path / "media")
+    monkeypatch.setattr(main_module, "THUMBNAIL_DIR", tmp_path / "thumbnails")
     monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "test.sqlite3")
 
 
