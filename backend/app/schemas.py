@@ -138,6 +138,9 @@ class ExportCreate(BaseModel):
     subtitle_preset: Literal["clean", "bold", "highlight"] = "clean"
     subtitle_segments: list[ExportSubtitleSegment] = Field(default_factory=list, max_length=10000)
     clip_segments: list[ExportClipSegment] = Field(default_factory=list, max_length=100)
+    crop_zoom: float = Field(default=1.0, ge=1.0, le=3.0, allow_inf_nan=False)
+    crop_x: float = Field(default=0.5, ge=0.0, le=1.0, allow_inf_nan=False)
+    crop_y: float = Field(default=0.5, ge=0.0, le=1.0, allow_inf_nan=False)
 
 
 class ExportResponse(BaseModel):
