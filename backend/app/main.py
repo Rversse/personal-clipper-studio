@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import mimetypes
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -687,14 +688,18 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
             ).fetchone()
             if job is None:
                 return
+            job_data = dict(job)
             connection.execute(
                 "UPDATE export_jobs SET status='processing', updated_at=? WHERE id=?",
                 (now_iso(), job_id),
             )
+        subtitle_payload = job_data.get("subtitle_payload")
         result = rendering.render_clip(
             Path(source_path), Path(destination_path),
-            float(job["start_seconds"]), float(job["end_seconds"]),
-            job["aspect_ratio"], progress=update_progress,
+            float(job_data["start_seconds"]), float(job_data["end_seconds"]),
+            job_data["aspect_ratio"], progress=update_progress,
+            subtitle_segments=json.loads(subtitle_payload) if subtitle_payload else None,
+            subtitle_preset=job_data.get("subtitle_preset") or "clean",
         )
         with get_connection() as connection:
             connection.execute(
@@ -722,8 +727,16 @@ async def start_export(
         raise HTTPException(status_code=422, detail="Titik akhir harus lebih besar dari titik awal.")
     try:
         rendering.available_encoder()
+        if payload.burn_subtitles and not rendering.subtitles_filter_available():
+            raise rendering.RenderError("FFmpeg tidak memiliki filter subtitles/libass. Burn-in subtitle tidak dapat dijalankan.")
     except rendering.RenderError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    if payload.burn_subtitles and not payload.subtitle_segments:
+        raise HTTPException(status_code=422, detail="Tidak ada segmen subtitle untuk di-burn-in.")
+    if payload.burn_subtitles:
+        for segment in payload.subtitle_segments:
+            if segment.end <= segment.start:
+                raise HTTPException(status_code=422, detail="Rentang waktu subtitle tidak valid.")
 
     with get_connection() as connection:
         media = connection.execute(
@@ -740,15 +753,20 @@ async def start_export(
     output_name = f"clip-{job_id}.mp4"
     destination = EXPORT_DIR / output_name
     timestamp = now_iso()
+    subtitle_payload = json.dumps(
+        [segment.model_dump() for segment in payload.subtitle_segments],
+        ensure_ascii=False,
+    ) if payload.burn_subtitles else None
     with get_connection() as connection:
         connection.execute(
             """INSERT INTO export_jobs(
                 id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
-                created_at,updated_at
-            ) VALUES(?,?,'queued',?,?,?,?,?,?)""",
+                subtitle_payload,subtitle_preset,created_at,updated_at
+            ) VALUES(?,?,'queued',?,?,?,?,?,?,?,?)""",
             (
                 job_id, asset_id, payload.start_seconds, payload.end_seconds,
-                payload.aspect_ratio, output_name, timestamp, timestamp,
+                payload.aspect_ratio, output_name, subtitle_payload,
+                payload.subtitle_preset, timestamp, timestamp,
             ),
         )
     background_tasks.add_task(run_export_job, job_id, str(source_path), str(destination))
