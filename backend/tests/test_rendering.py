@@ -3,7 +3,7 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from app import database, rendering
+from app import database, rendering, main as main_module
 from app.main import app
 
 
@@ -13,6 +13,8 @@ def setup_test_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "THUMBNAIL_DIR", tmp_path / "thumbnails")
     monkeypatch.setattr(database, "EXPORT_DIR", tmp_path / "exports")
     monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "test.sqlite3")
+    monkeypatch.setattr(main_module, "MEDIA_DIR", database.MEDIA_DIR)
+    monkeypatch.setattr(main_module, "EXPORT_DIR", database.EXPORT_DIR)
 
 
 def seed_media():
@@ -42,7 +44,7 @@ def test_render_command_has_trim_crop_and_safe_audio_mapping(tmp_path):
     assert command[command.index("-ss") + 1] == "5.000"
     assert command[command.index("-t") + 1] == "30.000"
     assert "crop=1080:1920" in command[command.index("-vf") + 1]
-    assert command[command.index("-map") + 2] == "0:a:0?"
+    assert command[command.index("-map") + 3] == "0:a:0?"
     assert "libx264" in command
     assert "+faststart" in command
 
