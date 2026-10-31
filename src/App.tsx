@@ -62,6 +62,9 @@ function App() {
   const [editStart, setEditStart] = useState(0);
   const [editEnd, setEditEnd] = useState(0);
   const [aspectRatio, setAspectRatio] = useState("9:16");
+  const [cropZoom, setCropZoom] = useState(1);
+  const [cropX, setCropX] = useState(0.5);
+  const [cropY, setCropY] = useState(0.5);
   const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
   const [burnSubtitles, setBurnSubtitles] = useState(false);
@@ -214,6 +217,7 @@ function App() {
           end_seconds: Math.max(...selectedClips.map(clip => clip.end)),
           clip_segments: selectedClips,
           aspect_ratio: aspectRatio,
+          crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY,
           burn_subtitles: burnSubtitles,
           subtitle_preset: subtitlePreset,
           subtitle_segments: burnSubtitles ? selectedSubtitles.map(segment => {
@@ -319,7 +323,7 @@ function App() {
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
-        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[] };
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; cropZoom?: number; cropX?: number; cropY?: number };
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
@@ -327,6 +331,9 @@ function App() {
         setSubtitlePreset(parsed.preset ?? "clean");
         setSplitPoints(parsed.splits ?? []);
         setClipSequence(Array.isArray(parsed.sequence) ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start) : []);
+        setCropZoom(Math.max(1, Math.min(3, parsed.cropZoom ?? 1)));
+        setCropX(Math.max(0, Math.min(1, parsed.cropX ?? 0.5)));
+        setCropY(Math.max(0, Math.min(1, parsed.cropY ?? 0.5)));
       } else {
         setEditStart(0);
         setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
@@ -334,6 +341,7 @@ function App() {
         setSplitPoints([]);
         setClipSequence([]);
         setAspectRatio("9:16");
+        setCropZoom(1); setCropX(0.5); setCropY(0.5);
         setSubtitlePreset("clean");
       }
     } catch {
@@ -342,6 +350,7 @@ function App() {
       setSubtitleText({});
       setSplitPoints([]);
       setClipSequence([]);
+      setCropZoom(1); setCropX(0.5); setCropY(0.5);
     }
     setEditorCandidateId("");
     setEditorSaved(false);
@@ -361,7 +370,7 @@ function App() {
   function saveEditorDraft() {
     if (!aiMediaId || editEnd <= editStart) return;
     localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
-      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence
+      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, cropZoom, cropX, cropY
     }));
     setEditorSaved(true);
     window.setTimeout(() => setEditorSaved(false), 2400);
@@ -465,7 +474,7 @@ function App() {
               <div className="editor-layout">
                 <div className="editor-preview-panel">
                   <div className="editor-panel-head"><div><strong>Preview monitor</strong><small>{media.find(item=>item.id===aiMediaId)?.original_name}</small></div><span className="editor-live-tag">SOURCE PREVIEW</span></div>
-                  <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onLoadedMetadata={e=>{if(editEnd<=0&&Number.isFinite(e.currentTarget.duration))setEditEnd(e.currentTarget.duration);if(editStart>0)e.currentTarget.currentTime=editStart;}} /></div>
+                  <div className={"preview-stage ratio-" + aspectRatio.replace(":","-")}><video ref={previewRef} controls preload="metadata" style={{ objectPosition: `${cropX*100}% ${cropY*100}%`, transform: `scale(${cropZoom})` }} src={API_BASE + (media.find(item=>item.id===aiMediaId)?.preview_url ?? "")} onLoadedMetadata={e=>{if(editEnd<=0&&Number.isFinite(e.currentTarget.duration))setEditEnd(e.currentTarget.duration);if(editStart>0)e.currentTarget.currentTime=editStart;}} /></div>
                   <div className="preview-actions"><button className="secondary-button" onClick={()=>seekPreview(editStart)}>Play from in</button><button className="secondary-button" onClick={()=>seekPreview(editEnd)}>Go to out</button></div>
                   <div className="timeline-panel"><div className="timeline-heading"><strong>Clip range</strong><span>{formatDuration(editorDuration)}</span></div>
                     <div className="timeline-track"><i style={{left:((editStart/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%",width:((editorDuration/(media.find(item=>item.id===aiMediaId)?.duration || 1))*100)+"%"}}/>{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><b key={point} className="timeline-split" style={{left:(((point-editStart)/editorDuration)*100)+"%"}}/>)}</div>
@@ -487,6 +496,13 @@ function App() {
                   <div className="editor-panel-head"><div><strong>Clip settings</strong><small>Basic edit controls</small></div></div>
                   <label>AI candidate<select value={editorCandidateId} onChange={e=>{setEditorCandidateId(e.target.value);if(!e.target.value){setEditStart(0);setEditEnd(media.find(item=>item.id===aiMediaId)?.duration ?? transcription?.duration ?? 0);}}}><option value="">Manual / full source</option>{(discovery?.candidates ?? []).map(c=><option key={c.id} value={c.id}>{c.title} · {c.score}/100</option>)}</select></label>
                   <label>Aspect ratio<select value={aspectRatio} onChange={e=>setAspectRatio(e.target.value)}><option value="9:16">9:16 · Shorts / Reels</option><option value="16:9">16:9 · Landscape</option><option value="1:1">1:1 · Square</option></select></label>
+                  <div className="crop-controls">
+                    <div className="crop-title"><strong>Crop &amp; reposition</strong><button type="button" onClick={()=>{setCropZoom(1);setCropX(0.5);setCropY(0.5);}}>Reset</button></div>
+                    <label>Zoom <output>{cropZoom.toFixed(2)}×</output><input type="range" min="1" max="3" step="0.05" value={cropZoom} onChange={e=>setCropZoom(Number(e.target.value))}/></label>
+                    <label>Horizontal position <output>{Math.round(cropX*100)}%</output><input type="range" min="0" max="1" step="0.01" value={cropX} onChange={e=>setCropX(Number(e.target.value))}/></label>
+                    <label>Vertical position <output>{Math.round(cropY*100)}%</output><input type="range" min="0" max="1" step="0.01" value={cropY} onChange={e=>setCropY(Number(e.target.value))}/></label>
+                    <small>Framing diterapkan pada preview dan hasil render.</small>
+                  </div>
                   <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
                   <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
                   <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save editing draft</button>
