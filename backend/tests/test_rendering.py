@@ -238,6 +238,7 @@ def test_export_api_persists_subtitle_payload_for_background_job(tmp_path, monke
                 "aspect_ratio": "9:16",
                 "burn_subtitles": True,
                 "subtitle_preset": "highlight",
+                "subtitle_style": {"font_size": 74, "vertical_position": 14, "outline_width": 5, "background_opacity": 55},
                 "subtitle_segments": [
                     {"start": 12, "end": 14, "text": "Edited caption"}
                 ],
@@ -247,7 +248,7 @@ def test_export_api_persists_subtitle_payload_for_background_job(tmp_path, monke
         job_id = response.json()["id"]
         with database.get_connection() as connection:
             row = connection.execute(
-                "SELECT subtitle_payload,subtitle_preset FROM export_jobs WHERE id=?",
+                "SELECT subtitle_payload,subtitle_preset,subtitle_style FROM export_jobs WHERE id=?",
                 (job_id,),
             ).fetchone()
         import json
@@ -255,6 +256,7 @@ def test_export_api_persists_subtitle_payload_for_background_job(tmp_path, monke
             {"start": 12.0, "end": 14.0, "text": "Edited caption"}
         ]
         assert row["subtitle_preset"] == "highlight"
+        assert json.loads(row["subtitle_style"]) == {"font_size": 74, "vertical_position": 14, "outline_width": 5.0, "background_opacity": 55}
 
 
 def test_export_api_rejects_burn_in_without_segments(tmp_path, monkeypatch):
@@ -445,3 +447,43 @@ def test_export_api_rejects_crop_settings_outside_supported_range(tmp_path, monk
             json={"start_seconds": 5, "end_seconds": 40, "crop_zoom": 3.5},
         )
         assert response.status_code == 422
+
+
+def test_subtitle_style_controls_map_to_ffmpeg_force_style(tmp_path):
+    command = rendering.build_render_command(
+        tmp_path / "source.mp4", tmp_path / "output.mp4", 0, 10,
+        "9:16", "libx264", subtitle_path=tmp_path / "captions.ass",
+        subtitle_preset="clean",
+        subtitle_style={
+            "font_size": 72, "vertical_position": 12,
+            "outline_width": 4.5, "background_opacity": 60,
+        },
+    )
+    video_filter = command[command.index("-vf") + 1]
+    assert "FontSize=72" in video_filter
+    assert "BorderStyle=3" in video_filter
+    assert "Outline=4.5" in video_filter
+    assert "MarginV=230" in video_filter
+    assert "OutlineColour=&H66000000" in video_filter
+
+
+def test_subtitle_style_rejects_out_of_range_values(tmp_path):
+    invalid_styles = [
+        {"font_size": 23}, {"font_size": 121},
+        {"vertical_position": 4}, {"vertical_position": 31},
+        {"outline_width": -0.1}, {"outline_width": 8.1},
+        {"background_opacity": -1}, {"background_opacity": 91},
+        {"outline_width": float("nan")},
+    ]
+    for style in invalid_styles:
+        try:
+            rendering.build_render_command(
+                tmp_path / "source.mp4", tmp_path / "out.mp4",
+                0, 10, "9:16", "libx264",
+                subtitle_path=tmp_path / "captions.ass",
+                subtitle_style=style,
+            )
+        except rendering.RenderError:
+            pass
+        else:
+            raise AssertionError("Out-of-range subtitle style must be rejected")
