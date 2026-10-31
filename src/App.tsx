@@ -71,7 +71,7 @@ function App() {
   const previewRef = useRef<HTMLVideoElement>(null);
   const editorCandidate = editorCandidateId ? discovery?.candidates.find(item => item.id === editorCandidateId) : undefined;
   const editorDuration = Math.max(0, editEnd - editStart);
-  const visibleSubtitleSegments = (transcription?.segments ?? []).filter(segment => segment.end > editStart && segment.start < editEnd);
+  const visibleSubtitleSegments = (transcription?.media_id === aiMediaId ? transcription.segments ?? [] : []).filter(segment => segment.end > editStart && segment.start < editEnd);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -103,6 +103,9 @@ function App() {
 
   useEffect(() => {
     if (!aiMediaId) return;
+    setTranscription(null);
+    setSubtitleText({});
+    setBurnSubtitles(false);
     let cancelled = false;
     const restoreLatestJobs = async () => {
       try {
