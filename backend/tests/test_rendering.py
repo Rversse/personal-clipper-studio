@@ -430,6 +430,9 @@ def test_export_api_persists_crop_settings(tmp_path, monkeypatch):
         assert row["crop_zoom"] == 1.8
         assert row["crop_x"] == 0.25
         assert row["crop_y"] == 0.7
+        assert response.json()["crop_zoom"] == 1.8
+        assert response.json()["crop_x"] == 0.25
+        assert response.json()["crop_y"] == 0.7
 
 
 def test_export_api_rejects_crop_settings_outside_supported_range(tmp_path, monkeypatch):
