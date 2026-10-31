@@ -238,3 +238,97 @@ def render_clip(
         temporary_output.unlink(missing_ok=True)
         if subtitle_file is not None:
             subtitle_file.unlink(missing_ok=True)
+
+
+
+def render_sequence(
+    source: Path,
+    destination: Path,
+    segments: list[dict],
+    aspect_ratio: str,
+    progress: Callable[[float], None] | None = None,
+    subtitle_segments: list[dict] | None = None,
+    subtitle_preset: str = "clean",
+) -> dict[str, str]:
+    if not source.is_file():
+        raise RenderError("File video sumber tidak ditemukan.")
+    if not segments or len(segments) > 100:
+        raise RenderError("Sequence harus berisi 1 sampai 100 klip.")
+    if aspect_ratio not in OUTPUT_SIZES:
+        raise RenderError("Rasio aspek tidak didukung.")
+    normalized: list[tuple[float, float]] = []
+    for segment in segments:
+        try:
+            start, end = float(segment["start"]), float(segment["end"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise RenderError("Data klip sequence tidak valid.") from error
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+            raise RenderError("Rentang salah satu klip tidak valid.")
+        normalized.append((start, end))
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RenderError("FFmpeg belum terpasang atau tidak ditemukan di PATH.")
+    if subtitle_segments is not None and not subtitles_filter_available(ffmpeg):
+        raise RenderError("FFmpeg tidak memiliki filter subtitles/libass.")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    part_paths = [
+        destination.parent / (".{}-{}-{:03d}.mp4".format(destination.stem, token, index + 1))
+        for index in range(len(normalized))
+    ]
+    concat_list = destination.parent / (".{}-{}.ffconcat".format(destination.stem, token))
+    temporary_output = destination.with_name(destination.stem + ".partial" + destination.suffix)
+    encoders: list[str] = []
+    total_duration = sum(end - start for start, end in normalized)
+    completed_duration = 0.0
+    try:
+        temporary_output.unlink(missing_ok=True)
+        for index, ((start, end), part_path) in enumerate(zip(normalized, part_paths)):
+            def segment_progress(value: float, *, base: float = completed_duration, length: float = end - start) -> None:
+                if progress:
+                    progress(min(0.98, (base + length * value) / total_duration * 0.95))
+            result = render_clip(
+                source, part_path, start, end, aspect_ratio,
+                progress=segment_progress, subtitle_segments=subtitle_segments,
+                subtitle_preset=subtitle_preset,
+            )
+            encoders.append(result["encoder"])
+            completed_duration += end - start
+        concat_entries = []
+        for part_path in part_paths:
+            safe_path = str(part_path.resolve()).replace("\\", "/").replace("'", "'\\''")
+            concat_entries.append("file '{}'".format(safe_path))
+        concat_list.write_text("\n".join(concat_entries) + "\n", encoding="utf-8")
+        concat_command = [
+            ffmpeg, "-hide_banner", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(concat_list),
+        ]
+        if len(set(encoders)) == 1:
+            concat_command += ["-c", "copy"]
+            final_encoder = encoders[0]
+        else:
+            concat_command += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k"]
+            final_encoder = "libx264"
+        concat_command += ["-movflags", "+faststart", str(temporary_output)]
+        try:
+            result = subprocess.run(
+                concat_command, capture_output=True, text=True, timeout=6 * 60 * 60, check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RenderError("Penggabungan klip melewati batas waktu 6 jam.") from error
+        except OSError as error:
+            raise RenderError("Gagal menjalankan FFmpeg concat: {}".format(error)) from error
+        if result.returncode != 0:
+            raise RenderError((result.stderr or "FFmpeg gagal menggabungkan klip.")[-3000:])
+        if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
+            raise RenderError("Hasil gabungan tidak valid atau terlalu kecil.")
+        os.replace(temporary_output, destination)
+        if progress:
+            progress(1.0)
+        return {"encoder": final_encoder, "output": str(destination)}
+    finally:
+        temporary_output.unlink(missing_ok=True)
+        concat_list.unlink(missing_ok=True)
+        for part_path in part_paths:
+            part_path.unlink(missing_ok=True)
