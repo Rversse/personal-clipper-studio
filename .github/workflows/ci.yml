@@ -26,7 +26,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ./backend
+      - run: pip install -e ".[dev]"
+      - name: Run backend tests
+        run: pytest -q
+        working-directory: backend
       - name: Verify API imports
         run: python -c "from app.main import app; print(app.title)"
         working-directory: backend
