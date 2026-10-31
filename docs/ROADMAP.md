@@ -26,6 +26,7 @@
 - [x] 9:16, 16:9, and 1:1 export framing controls
 - [x] Transcript text editing and visual subtitle presets
 - [x] Optional FFmpeg ASS subtitle burn-in with edited transcript text
+- [x] Subtitle Studio controls for font size, vertical position, outline, and background opacity, persisted through export rendering
 - [x] Ordered multi-clip sequence with per-clip trim ranges and reorder/remove controls
 - [x] FFmpeg sequence assembly with optional subtitle burn-in
 - [x] Crop zoom and horizontal/vertical focal positioning in preview and FFmpeg output
