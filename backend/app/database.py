@@ -68,6 +68,38 @@ def ensure_storage() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_transcription_media ON transcription_jobs(media_id);
             CREATE INDEX IF NOT EXISTS idx_transcript_job ON transcript_segments(job_id);
+            CREATE TABLE IF NOT EXISTS discovery_jobs (
+                id TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
+                transcription_id TEXT NOT NULL REFERENCES transcription_jobs(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'queued',
+                provider TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                category TEXT,
+                min_duration INTEGER NOT NULL,
+                max_duration INTEGER NOT NULL,
+                progress REAL NOT NULL DEFAULT 0,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS clip_candidates (
+                id TEXT PRIMARY KEY,
+                discovery_job_id TEXT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+                start_seconds REAL NOT NULL,
+                end_seconds REAL NOT NULL,
+                title TEXT NOT NULL,
+                hook TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                score INTEGER NOT NULL CHECK(score >= 0 AND score <= 100),
+                category TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(discovery_job_id, start_seconds, end_seconds)
+            );
+            CREATE INDEX IF NOT EXISTS idx_discovery_media ON discovery_jobs(media_id);
+            CREATE INDEX IF NOT EXISTS idx_candidate_job ON clip_candidates(discovery_job_id);
             """
         )
 
