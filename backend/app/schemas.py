@@ -119,10 +119,19 @@ class TranscriptionStatusResponse(BaseModel):
     created_at: str
     updated_at: str
 
+class ExportSubtitleSegment(BaseModel):
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
+    text: str = Field(max_length=500)
+
+
 class ExportCreate(BaseModel):
     start_seconds: float = Field(ge=0, allow_inf_nan=False)
     end_seconds: float = Field(gt=0, allow_inf_nan=False)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    burn_subtitles: bool = False
+    subtitle_preset: Literal["clean", "bold", "highlight"] = "clean"
+    subtitle_segments: list[ExportSubtitleSegment] = Field(default_factory=list, max_length=10000)
 
 
 class ExportResponse(BaseModel):
