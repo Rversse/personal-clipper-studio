@@ -30,7 +30,8 @@
 - [x] FFmpeg sequence assembly with optional subtitle burn-in
 - [x] Crop zoom and horizontal/vertical focal positioning in preview and FFmpeg output
 - [x] Convert split markers into renderable sequence clips
-- [ ] Visual multi-track timeline
+- [x] Source timeline ruler, live playhead, selected-range and split-point visualization, plus clickable sequence strip
+- [ ] Full visual multi-track timeline with per-track editing
 - [ ] Safe context-aware clip boundaries
 
 ## Phase 5 — rendering and delivery (partial)
