@@ -71,11 +71,22 @@ def ensure_storage() -> None:
         )
 
 
-def get_connection() -> sqlite3.Connection:
+from contextlib import contextmanager
+
+
+@contextmanager
+def get_connection() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(DATABASE_PATH, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys=ON")
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def connection_scope() -> Iterator[sqlite3.Connection]:
