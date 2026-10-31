@@ -112,6 +112,9 @@ def build_render_command(
     ffmpeg: str = "ffmpeg",
     subtitle_path: Path | None = None,
     subtitle_preset: str = "clean",
+    crop_zoom: float = 1.0,
+    crop_x: float = 0.5,
+    crop_y: float = 0.5,
 ) -> list[str]:
     if aspect_ratio not in OUTPUT_SIZES:
         raise RenderError("Rasio aspek tidak didukung.")
@@ -120,9 +123,14 @@ def build_render_command(
     if start_seconds < 0 or end_seconds <= start_seconds:
         raise RenderError("Rentang klip tidak valid.")
     width, height = OUTPUT_SIZES[aspect_ratio]
+    if not all(math.isfinite(value) for value in (crop_zoom, crop_x, crop_y)) or not 1.0 <= crop_zoom <= 3.0 or not 0.0 <= crop_x <= 1.0 or not 0.0 <= crop_y <= 1.0:
+        raise RenderError("Pengaturan crop/zoom berada di luar batas.")
     video_filter = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},setsar=1"
+        f"crop=w={width}/({crop_zoom:.4f}):h={height}/({crop_zoom:.4f}):"
+        f"x=(iw-{width}/({crop_zoom:.4f}))*{crop_x:.4f}:"
+        f"y=(ih-{height}/({crop_zoom:.4f}))*{crop_y:.4f},"
+        f"scale={width}:{height},setsar=1"
     )
     if subtitle_path is not None:
         if subtitle_preset not in SUBTITLE_STYLES:
@@ -188,6 +196,9 @@ def render_clip(
     progress: Callable[[float], None] | None = None,
     subtitle_segments: list[dict] | None = None,
     subtitle_preset: str = "clean",
+    crop_zoom: float = 1.0,
+    crop_x: float = 0.5,
+    crop_y: float = 0.5,
 ) -> dict[str, str]:
     if not source.is_file():
         raise RenderError("File video sumber tidak ditemukan.")
@@ -214,7 +225,7 @@ def render_clip(
             subtitle_file.write_text(build_ass_content(subtitle_segments, start_seconds, end_seconds, subtitle_preset, aspect_ratio), encoding="utf-8-sig")
         command = build_render_command(
             source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-            subtitle_file, subtitle_preset
+            subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y
         )
         try:
             _execute(command, duration, progress)
@@ -225,7 +236,7 @@ def render_clip(
             encoder = "libx264"
             cpu_command = build_render_command(
                 source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-                subtitle_file, subtitle_preset
+                subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y
             )
             _execute(cpu_command, duration, progress)
         if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
@@ -249,6 +260,9 @@ def render_sequence(
     progress: Callable[[float], None] | None = None,
     subtitle_segments: list[dict] | None = None,
     subtitle_preset: str = "clean",
+    crop_zoom: float = 1.0,
+    crop_x: float = 0.5,
+    crop_y: float = 0.5,
 ) -> dict[str, str]:
     if not source.is_file():
         raise RenderError("File video sumber tidak ditemukan.")
@@ -292,6 +306,7 @@ def render_sequence(
                 source, part_path, start, end, aspect_ratio,
                 progress=segment_progress, subtitle_segments=subtitle_segments,
                 subtitle_preset=subtitle_preset,
+                crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
             )
             encoders.append(result["encoder"])
             completed_duration += end - start
