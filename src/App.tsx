@@ -95,12 +95,15 @@ function App() {
         if (!response.ok) throw new Error("Gagal memeriksa status transkripsi.");
         const status = await response.json() as Transcription;
         if (cancelled) return;
-        setTranscription(previous => previous ? { ...previous, ...status } : status);
         if (status.status === "completed") {
           const detail = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}`);
-          if (detail.ok && !cancelled) setTranscription(await detail.json() as Transcription);
-        } else if (status.status === "queued" || status.status === "processing") {
-          timer = window.setTimeout(poll, 1800);
+          if (cancelled) return;
+          setTranscription(detail.ok ? await detail.json() as Transcription : status);
+        } else {
+          setTranscription(previous => previous ? { ...previous, ...status } : status);
+          if (status.status === "queued" || status.status === "processing") {
+            timer = window.setTimeout(poll, 1800);
+          }
         }
       } catch {
         if (!cancelled) timer = window.setTimeout(poll, 3000);
@@ -300,7 +303,7 @@ function App() {
               <section className="bottom-grid"><div className="empty-panel"><div className="panel-heading"><h3>Recent projects</h3><span className="muted-label">LATEST ACTIVITY</span></div>{projects.length ? <div className="recent-list">{projects.slice(0,4).map(p=><button key={p.id} onClick={()=>openProject(p)}><FolderOpen size={16}/><span><strong>{p.name}</strong><small>{p.media_count} video source</small></span><ArrowRight size={14}/></button>)}</div> : <div className="empty-state"><div className="empty-icon"><Archive size={21}/></div><strong>No projects yet</strong><p>Your projects will show up here after you import a video.</p><button className="subtle-button" onClick={()=>{setActive("Projects");setModalOpen(true);}}>Create first project <ArrowRight size={14}/></button></div>}</div><div className="pipeline-panel"><div className="panel-heading"><h3>Workflow</h3><span className="muted-label">4 SIMPLE STEPS</span></div>{[["01","Import video","Bring in a local video file"],["02","Find moments","AI discovers clip candidates"],["03","Fine-tune","Edit framing, cuts and captions"],["04","Export clips","Render for Shorts and Reels"]].map(([n,t,d])=><div className="pipeline-step" key={n}><span className="step-number">{n}</span><div><strong>{t}</strong><small>{d}</small></div><ArrowRight size={14}/></div>)}</div></section>
             </>
           )}
-          <footer><span>PERSONAL CLIPPER STUDIO <b>•</b> PHASE 2 BUILD</span><span>LOCAL-FIRST BY DESIGN</span></footer>
+          <footer><span>PERSONAL CLIPPER STUDIO <b>•</b> PHASE 3 BUILD</span><span>LOCAL-FIRST BY DESIGN</span></footer>
         </div>
       </main>
       {modalOpen && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModalOpen(false);}}><form className="project-modal" onSubmit={createProject}><div className="modal-heading"><div><span className="eyebrow">NEW WORKSPACE</span><h2>Create project</h2></div><button type="button" className="icon-button" onClick={()=>setModalOpen(false)}><X size={17}/></button></div><label>Project name<input autoFocus maxLength={120} value={projectName} onChange={e=>setProjectName(e.target.value)} placeholder="Contoh: Podcast Episode 01" required/></label><label>Description <span className="optional-label">OPTIONAL</span><textarea maxLength={2000} rows={3} value={projectDescription} onChange={e=>setProjectDescription(e.target.value)} placeholder="Catatan singkat tentang video atau project ini..."/></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={()=>setModalOpen(false)}>Cancel</button><button className="primary-button" type="submit"><Plus size={15}/> Create project</button></div></form></div>}
