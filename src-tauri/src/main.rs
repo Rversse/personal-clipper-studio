@@ -101,7 +101,7 @@ fn main() {
                 command
                     .arg("--port")
                     .arg("8765")
-                    .env("PCS_API_SESSION_TOKEN", &session_token)
+                    .arg("--require-session")
                     .stdin(Stdio::piped())
                     .stdout(Stdio::from(stdout))
                     .stderr(Stdio::from(stderr));
@@ -110,7 +110,14 @@ fn main() {
                 use std::os::windows::process::CommandExt;
                 command.creation_flags(0x08000000);
 
-                let child = command.spawn()?;
+                let mut child = command.spawn()?;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    writeln!(stdin, "session:{session_token}")?;
+                    stdin.flush()?;
+                } else {
+                    let _ = child.kill();
+                    return Err(std::io::Error::other("Backend session channel is unavailable.").into());
+                }
                 app.manage(BackendProcess(Mutex::new(Some(child))));
             }
 
