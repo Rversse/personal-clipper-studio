@@ -1,7 +1,14 @@
 from __future__ import annotations
 import sys
+from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
+
+BACKEND_ROOT = str(Path(__file__).resolve().parents[1])
+if BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, BACKEND_ROOT)
+
 from desktop_runner import main
 
 def test_runner_binds_only_to_loopback(monkeypatch):

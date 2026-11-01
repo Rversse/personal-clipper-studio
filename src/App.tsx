@@ -328,7 +328,7 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    let timer: ReturnType<typeof window.setTimeout> | undefined;
+    let timer: number | undefined;
     let connected = false;
 
     const checkHealth = async () => {
