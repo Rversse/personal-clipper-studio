@@ -146,17 +146,18 @@ def recover_interrupted_exports() -> None:
 
     for row in rows:
         output_name = str(row["output_name"])
-        if Path(output_name).name != output_name:
+        try:
+            destination = _managed_file_path(EXPORT_DIR, output_name, f"clip-{row['id']}.mp4")
+        except HTTPException:
             with get_connection() as connection:
                 connection.execute(
                     """UPDATE export_jobs SET status='failed',
-                       error='Nama file output tidak valid; export tidak dapat dipulihkan.',
+                       error='Referensi file output tidak valid; export tidak dapat dipulihkan.',
                        updated_at=? WHERE id=? AND status='processing'""",
                     (now_iso(), row["id"]),
                 )
             continue
 
-        destination = EXPORT_DIR / output_name
         if _is_completed_export(destination):
             # render_sequence uses os.replace only after FFmpeg produced a complete MP4.
             with get_connection() as connection:
@@ -269,6 +270,26 @@ VIDEO_MEDIA_TYPES = {
     ".mpg": "video/mpeg",
 }
 SAFE_FILE_RESPONSE_HEADERS = {"X-Content-Type-Options": "nosniff"}
+
+def _managed_file_path(directory: Path, stored_name: str, expected_name: str) -> Path:
+    """Resolve an app-owned filename without allowing DB values to escape storage."""
+    if (
+        not stored_name
+        or stored_name != expected_name
+        or Path(stored_name).name != stored_name
+        or "/" in stored_name
+        or "\\" in stored_name
+    ):
+        raise HTTPException(status_code=500, detail="Referensi file penyimpanan tidak valid.")
+    root = directory.resolve()
+    candidate = root / stored_name
+    try:
+        if candidate.is_symlink() or candidate.resolve(strict=False).parent != root:
+            raise HTTPException(status_code=500, detail="Referensi file penyimpanan tidak valid.")
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Referensi file penyimpanan tidak dapat diverifikasi.") from error
+    return candidate
+
 MAX_UPLOAD_BYTES = int(os.environ.get("PCS_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024 * 1024)))
 
 
@@ -426,15 +447,16 @@ def media_file(asset_id: str, thumbnail: bool = False) -> tuple[Path, str]:
     if thumbnail:
         if not row["thumbnail_name"]:
             raise HTTPException(status_code=404, detail="Thumbnail belum tersedia.")
-        path = THUMBNAIL_DIR / row["thumbnail_name"]
+        path = _managed_file_path(THUMBNAIL_DIR, row["thumbnail_name"], f"{asset_id}.jpg")
         media_type = "image/jpeg"
     else:
-        path = MEDIA_DIR / row["stored_name"]
+        extension = Path(str(row["stored_name"])).suffix.lower()
+        if extension not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=415, detail="Tipe media tersimpan tidak didukung.")
+        path = _managed_file_path(MEDIA_DIR, row["stored_name"], f"{asset_id}{extension}")
         # Do not trust MIME metadata persisted by older app versions; it may
         # have originated from the untrusted multipart Content-Type header.
-        media_type = VIDEO_MEDIA_TYPES.get(path.suffix.lower())
-        if media_type is None:
-            raise HTTPException(status_code=415, detail="Tipe media tersimpan tidak didukung.")
+        media_type = VIDEO_MEDIA_TYPES[extension]
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File media tidak ditemukan di penyimpanan.")
     return path, media_type
@@ -480,15 +502,29 @@ async def delete_media(asset_id: str):
                 detail="Video tidak dapat dihapus saat transkripsi, AI discovery, atau export masih berjalan.",
             )
         exports = connection.execute(
-            "SELECT output_name FROM export_jobs WHERE media_id=? AND status='completed'",
+            "SELECT id, output_name FROM export_jobs WHERE media_id=? AND status='completed'",
             (asset_id,),
         ).fetchall()
+        # Validate every persisted path before committing the destructive DB
+        # operation. A malformed/corrupted row must never delete outside storage.
+        media_extension = Path(str(row["stored_name"])).suffix.lower()
+        if media_extension not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=500, detail="Referensi media tersimpan tidak valid.")
+        media_path = _managed_file_path(MEDIA_DIR, row["stored_name"], f"{asset_id}{media_extension}")
+        thumbnail_path = (
+            _managed_file_path(THUMBNAIL_DIR, row["thumbnail_name"], f"{asset_id}.jpg")
+            if row["thumbnail_name"] else None
+        )
+        export_paths = [
+            _managed_file_path(EXPORT_DIR, export["output_name"], f"clip-{export['id']}.mp4")
+            for export in exports
+        ]
         connection.execute("DELETE FROM media_assets WHERE id=?", (asset_id,))
-    for export in exports:
-        (EXPORT_DIR / export["output_name"]).unlink(missing_ok=True)
-    (MEDIA_DIR / row["stored_name"]).unlink(missing_ok=True)
-    if row["thumbnail_name"]:
-        (THUMBNAIL_DIR / row["thumbnail_name"]).unlink(missing_ok=True)
+    for export_path in export_paths:
+        export_path.unlink(missing_ok=True)
+    media_path.unlink(missing_ok=True)
+    if thumbnail_path is not None:
+        thumbnail_path.unlink(missing_ok=True)
     return Response(status_code=204)
 
 
@@ -1491,7 +1527,7 @@ async def download_export(job_id: str):
         raise HTTPException(status_code=404, detail="Export tidak ditemukan.")
     if row["status"] != "completed":
         raise HTTPException(status_code=409, detail="File export belum siap diunduh.")
-    path = EXPORT_DIR / row["output_name"]
+    path = _managed_file_path(EXPORT_DIR, row["output_name"], f"clip-{job_id}.mp4")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File hasil export tidak ditemukan.")
     return FileResponse(path, media_type="video/mp4", filename=row["output_name"], headers=SAFE_FILE_RESPONSE_HEADERS)
