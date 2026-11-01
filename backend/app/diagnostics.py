@@ -108,6 +108,11 @@ def runtime_diagnostics() -> dict[str, Any]:
         "model_available": None,
         "models": [],
     }
+    key_status = {
+        "source": "not_selected",
+        "credential_store_available": None,
+        "configured": False,
+    }
     if provider == "gemini":
         model = os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
         key_status = credentials.gemini_key_status()
