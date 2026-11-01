@@ -79,11 +79,15 @@ async def get_ai_settings() -> dict[str, Any]:
 
 @router.put("/api/settings/ai/gemini-key")
 async def put_gemini_key(request: Request) -> dict[str, Any]:
-    raw_body = await request.body()
-    if len(raw_body) > 4096:
-        raise HTTPException(status_code=413, detail="Request konfigurasi terlalu besar.")
+    body_chunks: list[bytes] = []
+    body_size = 0
+    async for chunk in request.stream():
+        body_size += len(chunk)
+        if body_size > 4096:
+            raise HTTPException(status_code=413, detail="Request konfigurasi terlalu besar.")
+        body_chunks.append(chunk)
     try:
-        payload = json.loads(raw_body.decode("utf-8"))
+        payload = json.loads(b"".join(body_chunks).decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise HTTPException(status_code=400, detail="Format request konfigurasi tidak valid.") from error
     if not isinstance(payload, dict) or not isinstance(payload.get("api_key"), str):
