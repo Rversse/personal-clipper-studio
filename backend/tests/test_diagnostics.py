@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
-
 from app import diagnostics
 
 
@@ -10,6 +8,37 @@ def _mock_base(monkeypatch):
     monkeypatch.setattr(diagnostics, "_binary_info", lambda name: {"available": True, "version": "test"})
     monkeypatch.setattr(diagnostics.transcription, "is_available", lambda: True)
     monkeypatch.setattr(diagnostics.shutil, "which", lambda name: "ollama.exe" if name == "ollama" else None)
+
+
+def _mock_ollama_http(monkeypatch, payload: bytes = b'{"models":[]}', status: int = 200, error=None):
+    state = {}
+
+    class Response:
+        def __init__(self):
+            self.status = status
+
+        def read(self, _limit):
+            return payload
+
+    class Connection:
+        def __init__(self, host, port, timeout):
+            state["host"] = host
+            state["port"] = port
+            state["timeout"] = timeout
+
+        def request(self, method, path, headers):
+            state.update(method=method, path=path, headers=headers)
+            if error:
+                raise error
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            state["closed"] = True
+
+    monkeypatch.setattr(diagnostics.http.client, "HTTPConnection", Connection)
+    return state
 
 
 def test_gemini_diagnostics_reports_configuration_without_exposing_secret(monkeypatch):
@@ -60,21 +89,18 @@ def test_ollama_diagnostics_detects_server_and_selected_model(monkeypatch):
     monkeypatch.setenv("PCS_OLLAMA_URL", "http://127.0.0.1:11434")
     _mock_base(monkeypatch)
 
-    class Response:
-        def __enter__(self):
-            return self
+    state = _mock_ollama_http(
+        monkeypatch,
+        json.dumps({"models": [{"name": "qwen3:8b"}, {"name": "llama3:latest"}]}).encode(),
+    )
+    result = diagnostics.runtime_diagnostics()
 
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _limit):
-            return json.dumps({"models": [{"name": "qwen3:8b"}, {"name": "llama3:latest"}]}).encode()
-
-    with patch.object(diagnostics.urllib.request, "urlopen", return_value=Response()) as request:
-        result = diagnostics.runtime_diagnostics()
-
-    request.assert_called_once()
-    assert request.call_args.args[0].full_url == "http://127.0.0.1:11434/api/tags"
+    assert state["host"] == "127.0.0.1"
+    assert state["port"] == 11434
+    assert state["method"] == "GET"
+    assert state["path"] == "/api/tags"
+    assert state["timeout"] == 2
+    assert state["closed"] is True
     assert result["ai"]["configured"] is True
     assert result["ai"]["status"] == "connected_model_available"
     assert result["ai"]["ollama_connection"] == "connected"
@@ -91,18 +117,8 @@ def test_ollama_diagnostics_reports_missing_model(monkeypatch):
     monkeypatch.setenv("PCS_OLLAMA_URL", "http://localhost:11434")
     _mock_base(monkeypatch)
 
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _limit):
-            return b'{"models":[{"name":"llama3:latest"}]}'
-
-    with patch.object(diagnostics.urllib.request, "urlopen", return_value=Response()):
-        result = diagnostics.runtime_diagnostics()
+    _mock_ollama_http(monkeypatch, b'{"models":[{"name":"llama3:latest"}]}')
+    result = diagnostics.runtime_diagnostics()
 
     assert result["ai"]["status"] == "connected_model_missing"
     assert result["ai"]["ollama_connection"] == "connected"
@@ -115,8 +131,8 @@ def test_ollama_diagnostics_handles_unreachable_server(monkeypatch):
     monkeypatch.setenv("PCS_OLLAMA_URL", "http://127.0.0.1:11434")
     _mock_base(monkeypatch)
 
-    with patch.object(diagnostics.urllib.request, "urlopen", side_effect=OSError("connection refused")):
-        result = diagnostics.runtime_diagnostics()
+    _mock_ollama_http(monkeypatch, error=OSError("connection refused"))
+    result = diagnostics.runtime_diagnostics()
 
     assert result["ai"]["status"] == "configured_not_connected"
     assert result["ai"]["ollama_connection"] == "unreachable"
@@ -129,10 +145,10 @@ def test_ollama_diagnostics_never_contacts_non_loopback_endpoint(monkeypatch):
     monkeypatch.setenv("PCS_OLLAMA_URL", "https://example.com")
     _mock_base(monkeypatch)
 
-    with patch.object(diagnostics.urllib.request, "urlopen") as request:
-        result = diagnostics.runtime_diagnostics()
+    state = _mock_ollama_http(monkeypatch)
+    result = diagnostics.runtime_diagnostics()
 
-    request.assert_not_called()
+    assert "host" not in state
     assert result["ai"]["status"] == "configured_not_connected"
     assert result["ai"]["ollama_connection"] == "not_tested_unsafe_endpoint"
     assert "example.com" not in repr(result)
