@@ -48,7 +48,10 @@
 - [x] Persistent single-worker queue for multiple export jobs, serial execution, queued/active cancellation, subprocess termination, and temporary-file cleanup
 - [ ] Automatic resumption of interrupted active renders after a crash
 - [x] Burned-in subtitle rendering with Clean, Bold, and Highlight presets
-- [ ] Advanced Shorts / Reels export presets
+- [x] Platform export profiles for YouTube Shorts, Instagram Reels, Facebook Reels, Square Feed, Landscape, and Custom
+- [x] Balanced / High / Maximum CPU and NVENC quality profiles with configurable source / 24 / 30 / 60 FPS
+- [x] Optional FFmpeg loudnorm audio normalization with persisted per-job settings
+- [ ] Two-pass loudness analysis and per-project export defaults
 
 ## Phase 6 — hardening
 - [ ] Error recovery and cancellation
