@@ -1,3 +1,6 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+#[cfg(target_os = "windows")]
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -8,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "windows")]
 use tauri::{path::BaseDirectory, Manager};
 
 #[cfg(target_os = "windows")]

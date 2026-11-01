@@ -162,6 +162,8 @@ def _audio_boundary_adjustment(
                 reasons.append("energi bicara masih menguat setelah penutup")
 
     return max(-8, min(14, adjustment)), reasons
+
+
 def _opening_signal(
     segments: list[dict[str, Any]],
     index: int,

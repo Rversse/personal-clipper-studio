@@ -10,7 +10,9 @@ def is_available() -> bool:
     try:
         import faster_whisper  # noqa: F401
         return True
-    except ImportError:
+    except (ImportError, OSError):
+        # Windows native-extension load failures (for example a missing DLL)
+        # are availability failures too; keep the API response controlled.
         return False
 
 
@@ -22,9 +24,9 @@ def transcribe_file(
 ) -> dict[str, Any]:
     try:
         from faster_whisper import WhisperModel
-    except ImportError as error:
+    except (ImportError, OSError) as error:
         raise RuntimeError(
-            "Whisper belum terpasang. Jalankan: pip install -e \"backend[transcription]\""
+            "Whisper belum siap. Install backend[transcription] dan pastikan native runtime/DLL tersedia."
         ) from error
 
     device = os.environ.get("PCS_WHISPER_DEVICE", "auto")

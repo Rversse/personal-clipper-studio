@@ -253,3 +253,20 @@ def test_ensure_storage_migrates_legacy_transcript_database(tmp_path, monkeypatc
         assert response.status_code == 200
         assert response.json()["segments"][0]["text"] == "Legacy words are not available"
         assert response.json()["segments"][0]["words"] == []
+
+
+
+def test_whisper_availability_handles_native_dll_load_error(monkeypatch):
+    import builtins
+
+    monkeypatch.delitem(sys.modules, "faster_whisper", raising=False)
+    original_import = builtins.__import__
+
+    def fail_native_whisper_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "faster_whisper":
+            raise OSError("native CTranslate2 DLL is missing")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_native_whisper_import)
+
+    assert transcription.is_available() is False
