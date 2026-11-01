@@ -26,6 +26,7 @@ from .schemas import (
 )
 from . import ai_discovery, transcription, rendering, audio_analysis
 from .diagnostics import router as diagnostics_router
+from .ai_settings import router as ai_settings_router
 
 _EXPORT_WORKER_LOCK = threading.Lock()
 _EXPORT_WORKER_WAKE = threading.Event()
@@ -122,6 +123,7 @@ app = FastAPI(
 )
 
 app.include_router(diagnostics_router)
+app.include_router(ai_settings_router)
 
 app.add_middleware(
     CORSMiddleware,
