@@ -291,7 +291,7 @@ async def delete_media(asset_id: str):
 
 def word_timing_matches_segment_text(segment_text: str, words: list[dict]) -> bool:
     """Use word events only when their text reconstructs the complete segment."""
-    token_pattern = re.compile(r"\\w+|[^\\w\\s]", re.UNICODE)
+    token_pattern = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
     def tokens(value: str) -> list[str]:
         normalized = unicodedata.normalize("NFKC", value).casefold()

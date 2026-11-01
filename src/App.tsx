@@ -637,7 +637,7 @@ function App() {
   function hasCompleteWordTiming(segment:TranscriptSegment) {
     if (!segment.words?.length) return false;
     const tokens = (value:string) => value.normalize("NFKC")
-      .match(/[\\p{L}\\p{M}\\p{N}_]+|[^\\p{L}\\p{M}\\p{N}\\s]/gu)
+      .match(/[\p{L}\p{M}\p{N}_]+|[^\p{L}\p{M}\p{N}\s]/gu)
       ?.map(token => token.toLocaleLowerCase("id")) ?? [];
     const expected = tokens(segment.text);
     const actual = tokens(segment.words.map(word => word.text.trim()).join(" "));
