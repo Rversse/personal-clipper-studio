@@ -23,7 +23,8 @@ def seed_media():
     media_id = str(uuid.uuid4())
     timestamp = "2026-10-31T00:00:00+00:00"
     database.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-    (database.MEDIA_DIR / "source.mp4").write_bytes(b"source-video")
+    stored_name = f"{media_id}.mp4"
+    (database.MEDIA_DIR / stored_name).write_bytes(b"source-video")
     with database.get_connection() as connection:
         connection.execute(
             "INSERT INTO projects(id,name,description,created_at,updated_at) VALUES(?,?,?,?,?)",
@@ -33,7 +34,7 @@ def seed_media():
             """INSERT INTO media_assets(
                 id,project_id,original_name,stored_name,mime_type,file_size,duration,created_at
             ) VALUES(?,?,?,?,?,?,?,?)""",
-            (media_id, project_id, "source.mp4", "source.mp4", "video/mp4", 12, 120.0, timestamp),
+            (media_id, project_id, "source.mp4", stored_name, "video/mp4", 12, 120.0, timestamp),
         )
     return media_id
 
@@ -209,7 +210,7 @@ def test_export_api_persists_job_and_serves_completed_file(tmp_path, monkeypatch
         assert job["status"] == "queued"
         job_id = job["id"]
         real_run_export_job(
-            job_id, str(database.MEDIA_DIR / "source.mp4"),
+            job_id, str(database.MEDIA_DIR / f"{media_id}.mp4"),
             str(database.EXPORT_DIR / job["output_name"])
         )
         job = client.get(f"/api/exports/{job_id}").json()
@@ -756,7 +757,7 @@ def test_export_dequeued_during_shutdown_is_cancelled_before_render(tmp_path, mo
         main_module._EXPORT_WORKER_STOP.set()
         main_module.run_export_job(
             job_id,
-            str(database.MEDIA_DIR / "source.mp4"),
+            str(database.MEDIA_DIR / f"{media_id}.mp4"),
             str(database.EXPORT_DIR / response.json()["output_name"]),
         )
 
@@ -1168,7 +1169,7 @@ def test_export_worker_uses_persisted_render_settings(tmp_path, monkeypatch):
         assert response.status_code == 202
         job = response.json()
         real_run_export_job(
-            job["id"], str(database.MEDIA_DIR / "source.mp4"),
+            job["id"], str(database.MEDIA_DIR / f"{media_id}.mp4"),
             str(database.EXPORT_DIR / job["output_name"])
         )
     assert captured["quality_profile"] == "high"
