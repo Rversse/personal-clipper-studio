@@ -751,17 +751,17 @@ function App() {
                               className={"multitrack-clip video-clip"+(timelineSelectedIndex===index?" selected":"")+(draggedTimelineIndex===index?" dragging":"")}
                               style={{left:left+"%",width:width+"%"}}
                               draggable={clipSequence.length>1}
-                              onDragStart={event=>{event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",String(index));setDraggedTimelineIndex(index);}}
+                              onDragStart={event=>{if((event.target as HTMLElement).closest(".timeline-trim-handle")){event.preventDefault();return;}event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",String(index));setDraggedTimelineIndex(index);}}
                               onDragOver={event=>{if(clipSequence.length>1){event.preventDefault();event.dataTransfer.dropEffect="move";}}}
                               onDrop={event=>{event.preventDefault();const from=Number(event.dataTransfer.getData("text/plain"));if(Number.isInteger(from))reorderTimelineClip(from,index);setDraggedTimelineIndex(null);}}
                               onDragEnd={()=>setDraggedTimelineIndex(null)}
                               onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(clip.start);}}
                               onKeyDown={event=>{if(event.key==="ArrowLeft"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.max(0,index-1));}if(event.key==="ArrowRight"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.min(clipSequence.length-1,index+1));}}}
                               role="button" tabIndex={0} aria-label={"Video clip "+(index+1)+", "+formatTimestamp(clip.start)+" to "+formatTimestamp(clip.end)}>
-                              {clipSequence.length>0 && <span className="timeline-trim-handle left" title="Drag to trim clip start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"start")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
+                              {clipSequence.length>0 && <span className="timeline-trim-handle left" draggable={false} title="Drag to trim clip start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"start")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
                               <b>{String(index+1).padStart(2,"0")}</b><span className="timeline-clip-time">{formatTimestamp(clip.start)}–{formatTimestamp(clip.end)}</span>
                               <small>{(clip.crop_zoom??1).toFixed(1)}×</small>
-                              {clipSequence.length>0 && <span className="timeline-trim-handle right" title="Drag to trim clip end" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"end")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
+                              {clipSequence.length>0 && <span className="timeline-trim-handle right" draggable={false} title="Drag to trim clip end" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"end")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
                             </div>;
                           })}
                           {timelineClips.length>0 && <i className="multitrack-playhead" style={{left:(timelinePlayheadOutput/timelineTotalDuration*100)+"%"}}/>}
@@ -772,7 +772,7 @@ function App() {
                         <div className="multitrack-lane audio-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
                           {timelineClips.map((clip,index)=>{
                             const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
-                            return <div key={"audio-"+index} className="multitrack-clip audio-clip" style={{left:(offset/timelineTotalDuration*100)+"%",width:((clip.end-clip.start)/timelineTotalDuration*100)+"%"}} onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(clip.start);}}>
+                            return <div key={"audio-"+index} className="multitrack-clip audio-clip" style={{left:(offset/timelineTotalDuration*100)+"%",width:((clip.end-clip.start)/timelineTotalDuration*100)+"%"}} onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(clip.start);}}>
                               <span className="audio-linked-label">SOURCE AUDIO · LINKED</span>
                             </div>;
                           })}
@@ -783,18 +783,18 @@ function App() {
                         <div className="multitrack-lane captions-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
                           {timelineClips.flatMap((clip,index)=>{
                             const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
-                            return timelineTranscriptSegments.filter(segment=>segment.end>clip.start&&segment.start<clip.end).map((segment,segmentIndex)=>{
+                            return timelineTranscriptSegments.flatMap((segment,sourceSegmentIndex)=>{
+                              if(segment.end<=clip.start||segment.start>=clip.end) return [];
                               const start=Math.max(segment.start,clip.start);
                               const end=Math.min(segment.end,clip.end);
-                              const sourceSegmentIndex=timelineTranscriptSegments.indexOf(segment);
                               const captionText=subtitleText[sourceSegmentIndex] ?? segment.text;
-                              return <button type="button" key={"caption-"+index+"-"+segmentIndex}
+                              return [<button type="button" key={"caption-"+index+"-"+sourceSegmentIndex}
                                 className="timeline-caption-clip"
                                 style={{left:((offset+start-clip.start)/timelineTotalDuration*100)+"%",width:((end-start)/timelineTotalDuration*100)+"%"}}
                                 title={captionText}
                                 onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(start);}}>
                                 {captionText}
-                              </button>;
+                              </button>];
                             });
                           })}
                           {timelineClips.length>0&&timelineTranscriptSegments.length===0&&<span className="timeline-empty-hint">Transcribe video to populate caption track</span>}
