@@ -12,7 +12,31 @@ from app.main import app
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
+    # app.database computes its storage paths at import time. Patch both the
+    # module constants and the aliases imported by app.main so this test never
+    # reads or writes a developer's real application data directory, even when
+    # another test module imported app.database before this module was loaded.
+    from app import database
+
+    isolated_root = tmp_path / "pcs-test-data"
+    isolated_media = isolated_root / "media"
+    isolated_thumbnails = isolated_root / "thumbnails"
+    isolated_exports = isolated_root / "exports"
+    isolated_db = isolated_root / "studio.sqlite3"
+
+    for name, value in {
+        "APP_DATA_DIR": isolated_root,
+        "MEDIA_DIR": isolated_media,
+        "THUMBNAIL_DIR": isolated_thumbnails,
+        "EXPORT_DIR": isolated_exports,
+        "DATABASE_PATH": isolated_db,
+    }.items():
+        monkeypatch.setattr(database, name, value)
+    monkeypatch.setattr(main, "MEDIA_DIR", isolated_media)
+    monkeypatch.setattr(main, "THUMBNAIL_DIR", isolated_thumbnails)
+    monkeypatch.setattr(main, "EXPORT_DIR", isolated_exports)
+
     monkeypatch.setattr(
         main,
         "probe_media",
