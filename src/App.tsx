@@ -16,6 +16,8 @@ type Transcription = { id: string; media_id: string; status: string; model_name:
 type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: number; crop_y?: number; audio_volume?: number };
 type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; output_preset?:string; quality_profile?:string; frame_rate?:number|null; normalize_audio?:boolean; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string;boundary_quality:number;opening_boundary:string;ending_boundary:string;context_note:string}[] };
+type RuntimeDependency = { id:string; name:string; required:boolean; available:boolean; status:string; description:string; download_url:string|null; download_label:string|null; install_note:string };
+type RuntimeDiagnostics = { platform:string; ffmpeg:{available:boolean;version:string|null}; ffprobe:{available:boolean;version:string|null}; dependencies:RuntimeDependency[]; transcription:{installed:boolean;device:string;compute_type:string;model_downloaded:boolean|null}; ai:{provider:string;model:string|null;configured:boolean;status:string} };
 
 const navItems = [
   { label: "Overview", icon: Gauge },
@@ -39,6 +41,9 @@ function formatDuration(seconds: number | null) {
 function App() {
   const [active, setActive] = useState("Overview");
   const [health, setHealth] = useState<Health>("checking");
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
   const [media, setMedia] = useState<Media[]>([]);
@@ -158,6 +163,24 @@ function App() {
       setHealth("offline");
     }
   }, []);
+
+  const loadRuntimeDiagnostics = useCallback(async () => {
+    setDiagnosticsLoading(true);
+    setDiagnosticsError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/diagnostics`);
+      if (!response.ok) throw new Error("Tidak dapat membaca pemeriksaan software dari local service.");
+      setRuntimeDiagnostics(await response.json() as RuntimeDiagnostics);
+    } catch (e) {
+      setDiagnosticsError(e instanceof Error ? e.message : "Pemeriksaan software gagal.");
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (active === "Settings") void loadRuntimeDiagnostics();
+  }, [active, loadRuntimeDiagnostics]);
 
   const loadMedia = useCallback(async (project: Project) => {
     setLoading(true); setError("");
@@ -1215,6 +1238,20 @@ function App() {
               </div>
               <div className="export-list-heading"><div><h3>Export history</h3><p>100 pekerjaan terbaru dari perangkat ini</p></div><span>{exportJobs.length} jobs</span></div>
               {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{job.clip_count > 1 ? job.clip_count + " clips in sequence" : formatTimestamp(job.start_seconds) + " – " + formatTimestamp(job.end_seconds)} · {job.output_preset ?? job.aspect_ratio} · {job.quality_profile ?? "balanced"} · {job.frame_rate ? job.frame_rate+" FPS" : "Source FPS"} · {job.normalize_audio ? "Normalized audio" : "Original loudness"} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}{["queued","processing"].includes(job.status) && <button className="secondary-button export-cancel" onClick={async()=>{try{const response=await fetch(`${API_BASE}/api/exports/${job.id}/cancel`,{method:"POST"});const body=await response.json();if(!response.ok)throw new Error(body.detail??"Gagal membatalkan export.");setExportJobs(previous=>previous.map(item=>item.id===job.id?body as ExportJob:item));}catch(e){setError(e instanceof Error?e.message:"Gagal membatalkan export.");}}}>Cancel export</button>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
+            </section>
+          ) : active === "Settings" ? (
+            <section className="runtime-settings">
+              <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> SYSTEM READINESS</div><h1>System check.</h1><p className="welcome-copy">Periksa komponen yang dibutuhkan sebelum mulai clipping. Software yang belum tersedia akan disertai tautan unduhan resmi.</p></div><button className="secondary-button" onClick={()=>void loadRuntimeDiagnostics()} disabled={diagnosticsLoading}><RefreshCw size={14}/>{diagnosticsLoading ? "Memeriksa..." : "Check again"}</button></div>
+              {diagnosticsError && <div className="error-banner">{diagnosticsError}<button className="text-button" onClick={()=>void loadRuntimeDiagnostics()}>Retry</button></div>}
+              {!runtimeDiagnostics && diagnosticsLoading ? <div className="loading-state">Memeriksa software dan runtime lokal...</div> : null}
+              {runtimeDiagnostics && <>
+                <div className="runtime-summary"><div><span className="muted-label">PLATFORM</span><strong>{runtimeDiagnostics.platform === "nt" ? "Windows" : runtimeDiagnostics.platform}</strong></div><div><span className="muted-label">REQUIRED COMPONENTS</span><strong>{runtimeDiagnostics.dependencies.filter(item=>item.required && item.available).length}/{runtimeDiagnostics.dependencies.filter(item=>item.required).length} ready</strong></div><div><span className="muted-label">AI PROVIDER</span><strong>{runtimeDiagnostics.ai.provider} · {runtimeDiagnostics.ai.configured ? "configured" : "needs setup"}</strong></div></div>
+                <div className="runtime-section-heading"><div><h3>Software & runtime</h3><p>Komponen wajib dan opsional yang terdeteksi oleh aplikasi.</p></div><span>{runtimeDiagnostics.dependencies.filter(item=>item.required && !item.available).length ? "Action required" : "Required checks passed"}</span></div>
+                <div className="runtime-dependency-list">{runtimeDiagnostics.dependencies.map(item=><article className="runtime-dependency-card" key={item.id}><div className="runtime-dependency-top"><div><span className="runtime-dependency-kind">{item.required ? "REQUIRED" : "OPTIONAL"}</span><h4>{item.name}</h4></div><span className={"runtime-status "+(item.available ? "ready" : item.required ? "missing" : "optional")}>{item.available ? "Available" : item.required ? "Not detected" : "Not required"}</span></div><p>{item.description}</p>{!item.available && <div className="runtime-install-note">{item.install_note}</div>}{!item.available && item.download_url && <a className="runtime-download-link" href={item.download_url} target="_blank" rel="noreferrer">{item.download_label ?? "Open download page"} <ArrowRight size={14}/></a>}</article>)}</div>
+                <div className="runtime-section-heading"><div><h3>AI & transcription</h3><p>Konfigurasi provider dan mesin transkripsi.</p></div></div>
+                <div className="runtime-detail-grid"><article className="runtime-detail-card"><span className="muted-label">WHISPER ENGINE</span><strong>{runtimeDiagnostics.transcription.installed ? "Installed" : "Unavailable"}</strong><p>Device: {runtimeDiagnostics.transcription.device} · Compute: {runtimeDiagnostics.transcription.compute_type}</p><small>Model Whisper diunduh otomatis saat pertama kali digunakan; ukuran unduhan bergantung model yang dipilih.</small></article><article className="runtime-detail-card"><span className="muted-label">AI PROVIDER</span><strong>{runtimeDiagnostics.ai.provider} · {runtimeDiagnostics.ai.configured ? "Configured" : "Needs configuration"}</strong><p>Model: {runtimeDiagnostics.ai.model ?? "Default / not set"}</p><small>{runtimeDiagnostics.ai.provider === "ollama" ? "Pemeriksaan ini belum menguji koneksi Ollama atau memastikan model tersedia." : "Gemini memerlukan API key. Pemeriksaan ini tidak menampilkan atau mengirim API key."}</small></article></div>
+                <p className="runtime-footnote">Catatan: pemeriksaan ini membaca kondisi lokal, bukan menginstal software secara otomatis. Setelah memasang FFmpeg, pastikan folder bin masuk ke PATH lalu restart aplikasi dan tekan Check again. Python runtime sudah dibundel pada installer Windows.</p>
+              </>}
             </section>
           ) : active === "Projects" ? (
             <section className="projects-view">
