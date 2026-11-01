@@ -11,7 +11,7 @@ type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
 type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
-type ClipSegment = { start: number; end: number };
+type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: number; crop_y?: number };
 type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string}[] };
 
@@ -74,6 +74,7 @@ function App() {
   const [burnSubtitles, setBurnSubtitles] = useState(false);
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const [clipSequence, setClipSequence] = useState<ClipSegment[]>([]);
+  const [selectedSequenceIndex, setSelectedSequenceIndex] = useState<number | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [editorSaved, setEditorSaved] = useState(false);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
@@ -222,7 +223,12 @@ function App() {
         body: JSON.stringify({
           start_seconds: Math.min(...selectedClips.map(clip => clip.start)),
           end_seconds: Math.max(...selectedClips.map(clip => clip.end)),
-          clip_segments: selectedClips,
+          clip_segments: selectedClips.map(clip => ({
+            ...clip,
+            crop_zoom: clip.crop_zoom ?? cropZoom,
+            crop_x: clip.crop_x ?? cropX,
+            crop_y: clip.crop_y ?? cropY
+          })),
           aspect_ratio: aspectRatio,
           crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY,
           burn_subtitles: burnSubtitles,
@@ -331,7 +337,7 @@ function App() {
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
-        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; cropZoom?: number; cropX?: number; cropY?: number; subtitleFontSize?: number; subtitlePosition?: number; subtitleOutline?: number; subtitleBackground?: number };
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; selectedSequenceIndex?: number | null; cropZoom?: number; cropX?: number; cropY?: number; subtitleFontSize?: number; subtitlePosition?: number; subtitleOutline?: number; subtitleBackground?: number };
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
@@ -343,6 +349,7 @@ function App() {
         setSubtitleBackground(Math.max(0, Math.min(90, parsed.subtitleBackground ?? 0)));
         setSplitPoints(parsed.splits ?? []);
         setClipSequence(Array.isArray(parsed.sequence) ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start) : []);
+        setSelectedSequenceIndex(Number.isInteger(parsed.selectedSequenceIndex) && parsed.selectedSequenceIndex! >= 0 && parsed.selectedSequenceIndex! < (parsed.sequence?.length ?? 0) ? parsed.selectedSequenceIndex! : null);
         setCropZoom(Math.max(1, Math.min(3, parsed.cropZoom ?? 1)));
         setCropX(Math.max(0, Math.min(1, parsed.cropX ?? 0.5)));
         setCropY(Math.max(0, Math.min(1, parsed.cropY ?? 0.5)));
@@ -384,7 +391,7 @@ function App() {
   function saveEditorDraft() {
     if (!aiMediaId || editEnd <= editStart) return;
     localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
-      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, cropZoom, cropX, cropY, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
+      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, selectedSequenceIndex, cropZoom, cropX, cropY, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
     }));
     setEditorSaved(true);
     window.setTimeout(() => setEditorSaved(false), 2400);
@@ -396,27 +403,59 @@ function App() {
     setSplitPoints(previous => [...previous, point].sort((a,b)=>a-b).filter((value,index,array)=>index===0 || value-array[index-1]>0.25));
   }
 
+  function updateCropFraming(values: Partial<Pick<ClipSegment, "crop_zoom" | "crop_x" | "crop_y">>) {
+    const nextZoom = values.crop_zoom ?? cropZoom;
+    const nextX = values.crop_x ?? cropX;
+    const nextY = values.crop_y ?? cropY;
+    if (values.crop_zoom !== undefined) setCropZoom(values.crop_zoom);
+    if (values.crop_x !== undefined) setCropX(values.crop_x);
+    if (values.crop_y !== undefined) setCropY(values.crop_y);
+    if (selectedSequenceIndex !== null) {
+      setClipSequence(previous => previous.map((clip, index) => index === selectedSequenceIndex
+        ? { ...clip, crop_zoom: nextZoom, crop_x: nextX, crop_y: nextY }
+        : clip));
+    }
+  }
+
   function addCurrentRangeToSequence() {
     if (editEnd <= editStart || clipSequence.length >= 100) return;
-    setClipSequence(previous => [...previous, { start: editStart, end: editEnd }]);
+    const nextIndex = clipSequence.length;
+    setClipSequence(previous => [...previous, {
+      start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY
+    }]);
+    setSelectedSequenceIndex(nextIndex);
   }
 
   function addSplitRangesToSequence() {
     const points = splitPoints.filter(point => point > editStart && point < editEnd).sort((a,b)=>a-b);
     if (!points.length) return;
     const boundaries = [editStart, ...points, editEnd];
-    const ranges = boundaries.slice(0, -1).map((start, index) => ({ start, end: boundaries[index + 1] }));
+    const ranges = boundaries.slice(0, -1).map((start, index) => ({
+      start, end: boundaries[index + 1], crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY
+    }));
+    const nextIndex = clipSequence.length;
     setClipSequence(previous => [...previous, ...ranges].slice(0, 100));
+    setSelectedSequenceIndex(nextIndex);
   }
 
   function moveSequenceClip(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= clipSequence.length) return;
     setClipSequence(previous => {
-      const target = index + direction;
-      if (target < 0 || target >= previous.length) return previous;
       const next = [...previous];
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
+    if (selectedSequenceIndex === index) setSelectedSequenceIndex(target);
+    else if (selectedSequenceIndex === target) setSelectedSequenceIndex(index);
+  }
+
+  function removeSequenceClip(index: number) {
+    setClipSequence(previous => previous.filter((_, itemIndex) => itemIndex !== index));
+    if (selectedSequenceIndex === index) setSelectedSequenceIndex(null);
+    else if (selectedSequenceIndex !== null && selectedSequenceIndex > index) {
+      setSelectedSequenceIndex(selectedSequenceIndex - 1);
+    }
   }
 
   function seekPreview(seconds: number) {
@@ -427,10 +466,14 @@ function App() {
     }
   }
 
-  function selectSequenceClip(clip: ClipSegment) {
+  function selectSequenceClip(clip: ClipSegment, index: number) {
+    setSelectedSequenceIndex(index);
     setEditorCandidateId("");
     setEditStart(clip.start);
     setEditEnd(clip.end);
+    setCropZoom(clip.crop_zoom ?? cropZoom);
+    setCropX(clip.crop_x ?? cropX);
+    setCropY(clip.crop_y ?? cropY);
     seekPreview(clip.start);
   }
 
@@ -520,9 +563,9 @@ function App() {
                     <div className="sequence-panel">
                       <div className="sequence-heading"><strong>Render sequence</strong><span>{clipSequence.length} clips · {formatDuration(clipSequence.reduce((sum,clip)=>sum+clip.end-clip.start,0))}</span></div>
                       <button className="secondary-button sequence-add" onClick={addCurrentRangeToSequence} disabled={editEnd<=editStart||clipSequence.length>=100}>Add current range to sequence <Plus size={13}/></button>
-                      {clipSequence.length>0 ? <ol className="sequence-list">{clipSequence.map((clip,index)=><li key={index}><span><b>{String(index+1).padStart(2,"0")}</b>{formatTimestamp(clip.start)} – {formatTimestamp(clip.end)}<small>{formatDuration(clip.end-clip.start)}</small></span><div><button aria-label="Move clip up" title="Move up" disabled={index===0} onClick={()=>moveSequenceClip(index,-1)}>↑</button><button aria-label="Move clip down" title="Move down" disabled={index===clipSequence.length-1} onClick={()=>moveSequenceClip(index,1)}>↓</button><button aria-label="Remove clip" title="Remove" onClick={()=>setClipSequence(previous=>previous.filter((_,i)=>i!==index))}><X size={12}/></button></div></li>)}</ol> : <p className="sequence-empty">Belum ada urutan khusus. Render akan menggunakan rentang aktif.</p>}
-                      {clipSequence.length>0 && <button className="sequence-clear" onClick={()=>setClipSequence([])}>Clear sequence</button>}
-                      {clipSequence.length>0 && <div className="sequence-visual" aria-label="Visual clip sequence">{clipSequence.map((clip,index)=><button type="button" key={String(clip.start)+"-"+String(clip.end)+"-"+index} title={"Pilih klip "+(index+1)+": "+formatTimestamp(clip.start)+" – "+formatTimestamp(clip.end)} aria-label={"Pilih klip "+(index+1)} onClick={()=>selectSequenceClip(clip)}><b>{String(index+1).padStart(2,"0")}</b><span>{formatDuration(clip.end-clip.start)}</span></button>)}</div>}
+                      {clipSequence.length>0 ? <ol className="sequence-list">{clipSequence.map((clip,index)=><li key={index}><span><b>{String(index+1).padStart(2,"0")}</b>{formatTimestamp(clip.start)} – {formatTimestamp(clip.end)}<small>{formatDuration(clip.end-clip.start)}</small></span><div><button aria-label="Move clip up" title="Move up" disabled={index===0} onClick={()=>moveSequenceClip(index,-1)}>↑</button><button aria-label="Move clip down" title="Move down" disabled={index===clipSequence.length-1} onClick={()=>moveSequenceClip(index,1)}>↓</button><button aria-label="Remove clip" title="Remove" onClick={()=>removeSequenceClip(index)}><X size={12}/></button></div></li>)}</ol> : <p className="sequence-empty">Belum ada urutan khusus. Render akan menggunakan rentang aktif.</p>}
+                      {clipSequence.length>0 && <button className="sequence-clear" onClick={()=>{setClipSequence([]);setSelectedSequenceIndex(null);}}>Clear sequence</button>}
+                      {clipSequence.length>0 && <div className="sequence-visual" aria-label="Visual clip sequence">{clipSequence.map((clip,index)=><button type="button" key={String(clip.start)+"-"+String(clip.end)+"-"+index} title={"Pilih klip "+(index+1)+": "+formatTimestamp(clip.start)+" – "+formatTimestamp(clip.end)} aria-label={"Pilih klip "+(index+1)} onClick={()=>selectSequenceClip(clip,index)} className={selectedSequenceIndex===index?"selected":""}><b>{String(index+1).padStart(2,"0")}</b><span>{formatDuration(clip.end-clip.start)}</span><small>{(clip.crop_zoom ?? 1).toFixed(1)}× crop</small></button>)}</div>}
                     </div>
                     <div className="trim-grid">
                       <label>In point (seconds)<input type="number" min="0" step="0.1" value={editStart} onChange={e=>setEditStart(Math.max(0,Math.min(Number(e.target.value),editEnd-0.1)))}/></label>
@@ -535,11 +578,11 @@ function App() {
                   <label>AI candidate<select value={editorCandidateId} onChange={e=>{setEditorCandidateId(e.target.value);if(!e.target.value){setEditStart(0);setEditEnd(media.find(item=>item.id===aiMediaId)?.duration ?? transcription?.duration ?? 0);}}}><option value="">Manual / full source</option>{(discovery?.candidates ?? []).map(c=><option key={c.id} value={c.id}>{c.title} · {c.score}/100</option>)}</select></label>
                   <label>Aspect ratio<select value={aspectRatio} onChange={e=>setAspectRatio(e.target.value)}><option value="9:16">9:16 · Shorts / Reels</option><option value="16:9">16:9 · Landscape</option><option value="1:1">1:1 · Square</option></select></label>
                   <div className="crop-controls">
-                    <div className="crop-title"><strong>Crop &amp; reposition</strong><button type="button" onClick={()=>{setCropZoom(1);setCropX(0.5);setCropY(0.5);}}>Reset</button></div>
-                    <label>Zoom <output>{cropZoom.toFixed(2)}×</output><input type="range" min="1" max="3" step="0.05" value={cropZoom} onChange={e=>setCropZoom(Number(e.target.value))}/></label>
-                    <label>Horizontal position <output>{Math.round(cropX*100)}%</output><input type="range" min="0" max="1" step="0.01" value={cropX} onChange={e=>setCropX(Number(e.target.value))}/></label>
-                    <label>Vertical position <output>{Math.round(cropY*100)}%</output><input type="range" min="0" max="1" step="0.01" value={cropY} onChange={e=>setCropY(Number(e.target.value))}/></label>
-                    <small>Framing diterapkan pada preview dan hasil render.</small>
+                    <div className="crop-title"><strong>Crop &amp; reposition</strong><button type="button" onClick={()=>updateCropFraming({crop_zoom:1,crop_x:0.5,crop_y:0.5})}>Reset</button></div>
+                    <label>Zoom <output>{cropZoom.toFixed(2)}×</output><input type="range" min="1" max="3" step="0.05" value={cropZoom} onChange={e=>updateCropFraming({crop_zoom:Number(e.target.value)})}/></label>
+                    <label>Horizontal position <output>{Math.round(cropX*100)}%</output><input type="range" min="0" max="1" step="0.01" value={cropX} onChange={e=>updateCropFraming({crop_x:Number(e.target.value)})}/></label>
+                    <label>Vertical position <output>{Math.round(cropY*100)}%</output><input type="range" min="0" max="1" step="0.01" value={cropY} onChange={e=>updateCropFraming({crop_y:Number(e.target.value)})}/></label>
+                    <small>{selectedSequenceIndex !== null ? `Framing khusus untuk klip sequence ${selectedSequenceIndex+1}.` : "Framing untuk rentang aktif dan klip baru."} Preview dan hasil render mengikuti pengaturan ini.</small>
                   </div>
                   <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
                   <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
