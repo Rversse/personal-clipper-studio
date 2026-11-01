@@ -35,6 +35,9 @@
     "category": "Video",
     "resources": [
       "resources/pcs-api/"
+    ],
+    "icon": [
+      "icons/icon.ico"
     ]
   }
 }
