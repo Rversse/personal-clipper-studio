@@ -11,8 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(target_os = "windows")]
-use tauri::{path::BaseDirectory, Manager};
+# [cfg(target_os = "windows")]
+use tauri::path::BaseDirectory;
+use tauri::Manager;
 
 struct AppSessionToken(String);
 
