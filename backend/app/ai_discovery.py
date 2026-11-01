@@ -47,7 +47,12 @@ def provider_settings() -> dict[str, str]:
     if provider not in {"gemini", "ollama"}:
         raise DiscoveryProviderError("Provider AI tidak dikenal. Pilih gemini atau ollama.")
     if provider == "gemini":
-        api_key = credentials.get_gemini_api_key() or ""
+        try:
+            api_key = credentials.get_gemini_api_key() or ""
+        except credentials.CredentialStoreError as error:
+            raise DiscoveryProviderError(
+                "Tidak dapat membaca Gemini API key dari penyimpanan kredensial Windows."
+            ) from error
         model = os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
         if not model:
             raise DiscoveryProviderError("PCS_GEMINI_MODEL tidak boleh kosong.")
