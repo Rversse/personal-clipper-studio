@@ -60,6 +60,14 @@ def test_uploaded_media_uses_server_controlled_mime_type(client, extension, expe
 
     assert media["mime_type"] == expected_type
 
+    # Legacy databases may already contain client-controlled MIME metadata.
+    from app.database import get_connection
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE media_assets SET mime_type='text/html' WHERE id=?",
+            (media["id"],),
+        )
+
     response = client.get(media["preview_url"])
     assert response.status_code == 200
     assert response.headers["content-type"].split(";")[0] == expected_type
