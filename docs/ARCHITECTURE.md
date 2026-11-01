@@ -24,7 +24,7 @@ The frontend retries the health endpoint while the service is starting and conti
 2. Bind the API to loopback only, never to all network interfaces by default.
 3. Refuse to start the packaged service when port `8765` is already occupied rather than silently connecting to an unrelated process.
 4. Keep source media untouched. Derived assets live in an app-managed workspace.
-5. Persist project metadata locally in SQLite. Keep API credentials outside source control; operating-system credential-store integration remains future work.
+5. Persist project metadata locally in SQLite. Store Gemini API credentials in the current Windows user's Credential Manager; never persist them in SQLite, app settings files, or logs.
 6. Run transcription and rendering as background jobs with explicit state and cancellation.
 7. On restart, requeue interrupted exports from persisted render settings; retain a final MP4 only when the renderer's atomic commit left a valid MP4 signature, and clean job-scoped temporary artifacts before retrying.
 8. AI output is advisory. Every candidate is reviewed by the user before export.
@@ -40,6 +40,9 @@ Import → probe metadata → transcribe → discover candidate moments → user
 - FFmpeg and FFprobe remain separately installed system tools and must be available on PATH.
 - NVIDIA CUDA/cuDNN and NVENC capabilities depend on the target machine and its FFmpeg/driver configuration.
 - Gemini and Ollama providers are configured by the user; no API secrets or model weights are embedded in the installer.
+- Gemini API keys are stored through the Windows Vault backend in Windows Credential Manager. The local API returns credential presence/source only, never the secret value. Environment-provided keys remain supported and take precedence.
+- Gemini connection testing uses a read-only HTTPS model-metadata request with the key in the request header; it does not send prompts or use generation tokens.
+- Windows Credential Manager protects secrets at rest for the current Windows user; it does not protect against malware or processes already running as that user.
 
 ## Security and content
 
