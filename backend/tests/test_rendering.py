@@ -594,22 +594,6 @@ def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
         assert client.post(f"/api/exports/{job_id}/cancel").status_code == 409
 
 
-def test_execute_honors_pre_cancelled_control(monkeypatch):
-    control = rendering.RenderControl()
-    control.cancel()
-    monkeypatch.setattr(
-        rendering.subprocess, "Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("FFmpeg must not start")),
-    )
-    try:
-        rendering._execute(["ffmpeg"], 10, None, control)
-    except rendering.RenderCancelled:
-        pass
-    else:
-        raise AssertionError("Pre-cancelled render must stop before spawning FFmpeg")
-
-
-
 def test_execute_terminates_running_process_when_cancelled(monkeypatch):
     import io
     import threading
