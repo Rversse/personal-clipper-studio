@@ -159,17 +159,28 @@ function Test-InstalledApplication {
         }
         if (-not $healthy) { throw "$InstallerLabel did not start its bundled local API within 60 seconds." }
 
-        $payload = @{
-            name = "$InstallerLabel installation smoke test"
-            description = "Created by the ephemeral Windows installer verification."
-        } | ConvertTo-Json -Compress
-        $created = Invoke-RestMethod -Method Post -Uri "$ApiUrl/api/projects" -ContentType "application/json" -Body $payload -TimeoutSec 10
-        if (-not $created.id) { throw "$InstallerLabel API did not return a project ID after project creation." }
-
-        $projects = @(Invoke-RestMethod -Uri "$ApiUrl/api/projects" -TimeoutSec 10)
-        if (-not ($projects | Where-Object { $_.id -eq $created.id })) {
-            throw "$InstallerLabel SQLite project was not present in the project list."
+        # The installed desktop host owns the session token through Tauri IPC.
+        # This external installer test must not bypass that boundary or invent a
+        # second credential channel. Verify that the packaged API rejects callers
+        # that do not possess the WebView session token.
+        $unauthorized = $false
+        try {
+            $null = Invoke-RestMethod -Uri "$ApiUrl/api/projects" -TimeoutSec 10
         }
+        catch {
+            $statusCode = 0
+            if ($null -ne $_.Exception.Response -and $null -ne $_.Exception.Response.StatusCode) {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+            }
+            if ($statusCode -ne 401) {
+                throw
+            }
+            $unauthorized = $true
+        }
+        if (-not $unauthorized) {
+            throw "$InstallerLabel API accepted an unauthenticated project request."
+        }
+
 
         $backend = Get-CimInstance Win32_Process -Filter "Name='pcs-api.exe'" |
             Where-Object { $_.ParentProcessId -eq $desktopProcess.Id } |
