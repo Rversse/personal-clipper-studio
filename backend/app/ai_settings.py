@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from . import credentials
 
@@ -16,7 +16,9 @@ router = APIRouter()
 
 
 class GeminiKeyPayload(BaseModel):
-    api_key: str = Field(min_length=1, max_length=credentials.MAX_API_KEY_LENGTH)
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    api_key: SecretStr = Field(min_length=1, max_length=credentials.MAX_API_KEY_LENGTH)
 
 
 def _model_name() -> str:
@@ -85,7 +87,7 @@ async def get_ai_settings() -> dict[str, Any]:
 @router.put("/api/settings/ai/gemini-key")
 async def put_gemini_key(payload: GeminiKeyPayload) -> dict[str, Any]:
     try:
-        credentials.save_gemini_api_key(payload.api_key)
+        credentials.save_gemini_api_key(payload.api_key.get_secret_value())
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except credentials.CredentialStoreUnavailable as error:
