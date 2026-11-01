@@ -172,8 +172,21 @@ function Test-InstalledApplication {
     }
     finally {
         if ($null -ne $desktopProcess -and -not $desktopProcess.HasExited) {
-            & taskkill.exe /PID $desktopProcess.Id /T /F | Out-Null
-            try { Wait-Process -Id $desktopProcess.Id -Timeout 15 -ErrorAction SilentlyContinue } catch {}
+            $closeRequested = $false
+            try { $closeRequested = $desktopProcess.CloseMainWindow() } catch {}
+            if (-not $closeRequested) {
+                & taskkill.exe /PID $desktopProcess.Id /T /F | Out-Null
+                try { Wait-Process -Id $desktopProcess.Id -Timeout 15 -ErrorAction SilentlyContinue } catch {}
+                throw "$InstallerLabel desktop app did not accept a normal window-close request."
+            }
+            if (-not $desktopProcess.WaitForExit(20000)) {
+                & taskkill.exe /PID $desktopProcess.Id /T /F | Out-Null
+                try { Wait-Process -Id $desktopProcess.Id -Timeout 15 -ErrorAction SilentlyContinue } catch {}
+                throw "$InstallerLabel desktop app did not exit within 20 seconds after a normal close request."
+            }
+            if ($desktopProcess.ExitCode -ne 0) {
+                throw "$InstallerLabel desktop app exited with code $($desktopProcess.ExitCode) after a normal close request."
+            }
         }
         Wait-ForPortClosed
     }

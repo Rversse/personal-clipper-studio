@@ -495,3 +495,66 @@ def test_rms_energy_changes_adjust_opening_and_ending_signals():
     assert refined is not None
     assert "energi bicara menguat" in refined["opening_boundary"]
     assert "energi bicara mereda" in refined["ending_boundary"]
+
+
+
+def test_audio_feature_index_matches_raw_scoring_and_sorts_out_of_order_samples():
+    from app.clip_boundaries import _audio_boundary_adjustment, _prepare_audio_features
+
+    features = {
+        "energy_samples": [
+            {"time": 10.8, "rms_db": -15.0},
+            {"time": 8.8, "rms_db": -34.0},
+            {"time": 10.3, "rms_db": -16.0},
+            {"time": 9.2, "rms_db": -32.0},
+        ],
+        "silences": [
+            {"start": 19.9, "end": 20.4, "duration": 0.5},
+            {"start": 9.7, "end": 10.0, "duration": 0.3},
+            {"start": float("nan"), "end": 30.0, "duration": 1.0},
+        ],
+    }
+
+    prepared = _prepare_audio_features(features)
+
+    assert prepared is not None
+    assert prepared is _prepare_audio_features(prepared)
+    assert _audio_boundary_adjustment(10.0, prepared, "opening") == _audio_boundary_adjustment(
+        10.0, features, "opening"
+    )
+    assert _audio_boundary_adjustment(20.0, prepared, "ending") == _audio_boundary_adjustment(
+        20.0, features, "ending"
+    )
+
+
+def test_candidate_refinement_prepares_audio_features_once(monkeypatch):
+    from app import clip_boundaries
+
+    original_prepare = clip_boundaries._prepare_audio_features
+    calls = []
+
+    def tracked_prepare(features):
+        calls.append(features)
+        return original_prepare(features)
+
+    monkeypatch.setattr(clip_boundaries, "_prepare_audio_features", tracked_prepare)
+    transcript = [
+        {"start": 0.0, "end": 10.0, "text": "Konteks sebelumnya sudah selesai."},
+        {"start": 10.0, "end": 20.0, "text": "Jawaban akhirnya sudah lengkap."},
+    ]
+    features = {
+        "energy_samples": [
+            {"time": 9.0, "rms_db": -35.0},
+            {"time": 10.5, "rms_db": -15.0},
+            {"time": 19.0, "rms_db": -15.0},
+            {"time": 20.5, "rms_db": -35.0},
+        ],
+        "silences": [],
+    }
+
+    refined = clip_boundaries.refine_candidate_boundaries(
+        10.1, 19.0, transcript, 5, 15, audio_features=features
+    )
+
+    assert refined is not None
+    assert len(calls) == 1

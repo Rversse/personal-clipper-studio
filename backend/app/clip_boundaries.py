@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 import math
 import re
 from typing import Any
@@ -46,6 +47,60 @@ def _gap(left: dict[str, Any], right: dict[str, Any]) -> float:
 
 
 
+def _prepare_audio_features(
+    audio_features: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Build reusable time indexes for audio boundary scoring.
+
+    RMS samples are emitted in timestamp order. Preparing the indexes once per
+    candidate refinement avoids rescanning the entire recording for each word.
+    """
+    if not isinstance(audio_features, dict):
+        return None
+    if audio_features.get("_boundary_indexed") is True:
+        return audio_features
+
+    silence_starts: list[float] = []
+    silence_ends: list[float] = []
+    for silence in audio_features.get("silences", []):
+        if not isinstance(silence, dict):
+            continue
+        try:
+            start = float(silence["start"])
+            end = float(silence["end"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(start) and math.isfinite(end) and start >= 0 and end > start:
+            silence_starts.append(start)
+            silence_ends.append(end)
+
+    samples: list[tuple[float, float]] = []
+    for sample in audio_features.get("energy_samples", []):
+        if not isinstance(sample, dict):
+            continue
+        try:
+            sample_time = float(sample["time"])
+            rms_db = float(sample["rms_db"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(sample_time) and sample_time >= 0 and math.isfinite(rms_db):
+            samples.append((sample_time, rms_db))
+    samples.sort(key=lambda sample: sample[0])
+
+    energy_times = tuple(sample[0] for sample in samples)
+    energy_prefix = [0.0]
+    for _, level in samples:
+        energy_prefix.append(energy_prefix[-1] + level)
+
+    return {
+        "_boundary_indexed": True,
+        "_silence_starts": tuple(sorted(silence_starts)),
+        "_silence_ends": tuple(sorted(silence_ends)),
+        "_energy_times": energy_times,
+        "_energy_prefix": tuple(energy_prefix),
+    }
+
+
 def _audio_boundary_adjustment(
     timestamp: float,
     audio_features: dict[str, Any] | None,
@@ -54,56 +109,42 @@ def _audio_boundary_adjustment(
     """Return a small prosody adjustment from nearby pauses and RMS changes."""
     if not isinstance(audio_features, dict) or edge not in {"opening", "ending"}:
         return 0, []
+    indexed = (
+        audio_features
+        if audio_features.get("_boundary_indexed") is True
+        else _prepare_audio_features(audio_features)
+    )
+    if indexed is None:
+        return 0, []
+
     adjustment = 0
     reasons: list[str] = []
 
-    for silence in audio_features.get("silences", []):
-        if not isinstance(silence, dict):
-            continue
-        try:
-            silence_start = float(silence["start"])
-            silence_end = float(silence["end"])
-            if (
-                not math.isfinite(silence_start)
-                or not math.isfinite(silence_end)
-                or silence_end <= silence_start
-            ):
-                continue
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
+    if edge == "opening":
+        silence_values = indexed["_silence_ends"]
+        pause_reason = "setelah jeda audio alami"
+    else:
+        silence_values = indexed["_silence_starts"]
+        pause_reason = "sebelum jeda audio alami"
+    silence_index = bisect_left(silence_values, timestamp - 0.4)
+    if (
+        silence_index < len(silence_values)
+        and silence_values[silence_index] <= timestamp + 0.4
+    ):
+        adjustment += 10
+        reasons.append(pause_reason)
 
-        if edge == "opening" and abs(timestamp - silence_end) <= 0.4:
-            adjustment += 10
-            reasons.append("setelah jeda audio alami")
-            break
-        if edge == "ending" and abs(timestamp - silence_start) <= 0.4:
-            adjustment += 10
-            reasons.append("sebelum jeda audio alami")
-            break
-
-    samples = []
-    for sample in audio_features.get("energy_samples", []):
-        if not isinstance(sample, dict):
-            continue
-        try:
-            sample_time = float(sample["time"])
-            rms_db = float(sample["rms_db"])
-            if math.isfinite(sample_time) and math.isfinite(rms_db):
-                samples.append((sample_time, rms_db))
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-
-    before = [
-        level for sample_time, level in samples
-        if timestamp - 1.5 <= sample_time <= timestamp - 0.15
-    ]
-    after = [
-        level for sample_time, level in samples
-        if timestamp + 0.15 <= sample_time <= timestamp + 1.5
-    ]
-    if before and after:
-        before_level = sum(before) / len(before)
-        after_level = sum(after) / len(after)
+    times = indexed["_energy_times"]
+    prefix = indexed["_energy_prefix"]
+    before_left = bisect_left(times, timestamp - 1.5)
+    before_right = bisect_right(times, timestamp - 0.15)
+    after_left = bisect_left(times, timestamp + 0.15)
+    after_right = bisect_right(times, timestamp + 1.5)
+    before_count = before_right - before_left
+    after_count = after_right - after_left
+    if before_count > 0 and after_count > 0:
+        before_level = (prefix[before_right] - prefix[before_left]) / before_count
+        after_level = (prefix[after_right] - prefix[after_left]) / after_count
         change = after_level - before_level
         if edge == "opening":
             if change >= 4.0:
@@ -458,6 +499,7 @@ def refine_candidate_boundaries(
         return None
     if target_end <= target_start or min_duration <= 0 or max_duration < min_duration:
         return None
+    prepared_audio = _prepare_audio_features(audio_features)
     proposed_duration = target_end - target_start
     # Boundary refinement may recover a small amount of missing setup/payoff,
     # but must not stretch an invalid proposal into the requested duration band.
@@ -475,7 +517,7 @@ def refine_candidate_boundaries(
         return None
 
     word_refined = _refine_with_word_boundaries(
-        target_start, target_end, ordered, min_duration, max_duration, audio_features
+        target_start, target_end, ordered, min_duration, max_duration, prepared_audio
     )
     if word_refined is not None:
         return word_refined
@@ -484,14 +526,14 @@ def refine_candidate_boundaries(
     for index, segment in enumerate(ordered):
         boundary = float(segment["start"])
         if target_start - 10.0 <= boundary <= target_start + 2.0:
-            quality, reason = _opening_signal(ordered, index, audio_features)
+            quality, reason = _opening_signal(ordered, index, prepared_audio)
             starts.append((boundary, quality, reason, index))
 
     ends = []
     for index, segment in enumerate(ordered):
         boundary = float(segment["end"])
         if target_end - 2.0 <= boundary <= target_end + 10.0:
-            quality, reason = _ending_signal(ordered, index, audio_features)
+            quality, reason = _ending_signal(ordered, index, prepared_audio)
             ends.append((boundary, quality, reason, index))
 
     best: tuple[float, dict[str, Any]] | None = None
