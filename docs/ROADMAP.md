@@ -48,6 +48,7 @@
 
 ## Phase 5 — rendering and delivery (partial)
 - [x] Single-clip and ordered multi-clip FFmpeg H.264 MP4 render pipeline with atomic output replacement
+- [x] Automated FFmpeg end-to-end integration test using generated video/audio, verifying 9:16 1080×1920 H.264/AAC output and rendered duration
 - [x] NVENC attempt with automatic libx264 CPU fallback on encoder failure
 - [x] Persistent export job records, status endpoint, history, and completed-file download
 - [x] Live FFmpeg progress streamed into persistent export job status
