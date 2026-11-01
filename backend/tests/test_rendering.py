@@ -692,8 +692,9 @@ def test_export_api_persists_per_clip_crop_and_uses_global_fallback(tmp_path, mo
         ]
 
 
-def test_render_sequence_rejects_invalid_per_clip_crop():
-    source = Path("unused-source.mp4")
+def test_render_sequence_rejects_invalid_per_clip_crop(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
     try:
         rendering.render_sequence(
             source, Path("unused-output.mp4"),
