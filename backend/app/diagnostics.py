@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter
 
-from . import transcription
+from . import credentials, transcription
 
 router = APIRouter()
 
@@ -110,7 +110,8 @@ def runtime_diagnostics() -> dict[str, Any]:
     }
     if provider == "gemini":
         model = os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
-        configured = bool(os.environ.get("PCS_GEMINI_API_KEY", "").strip() and model)
+        key_status = credentials.gemini_key_status()
+        configured = bool(key_status["configured"] and model)
         ai_status = "configured" if configured else "missing_api_key"
     elif provider == "ollama":
         model = os.environ.get("PCS_OLLAMA_MODEL", "qwen3:8b").strip()
@@ -190,6 +191,8 @@ def runtime_diagnostics() -> dict[str, Any]:
             "ollama_connection": ollama["connection"],
             "ollama_model_available": ollama["model_available"],
             "ollama_models": ollama["models"],
+            "gemini_key_source": key_status["source"] if provider == "gemini" else "not_selected",
+            "credential_store_available": key_status["credential_store_available"] if provider == "gemini" else None,
         },
     }
 
