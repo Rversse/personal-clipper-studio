@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 import uuid
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -177,3 +179,77 @@ def test_update_word_timing_validates_and_persists(tmp_path, monkeypatch):
             json={"start": 0.8, "end": 1.1, "text": "satu"},
         )
         assert invalid.status_code == 422
+
+
+
+def test_transcribe_file_enables_and_normalizes_word_timestamps(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_name, device, compute_type):
+            captured["model"] = (model_name, device, compute_type)
+
+        def transcribe(self, source, **options):
+            captured["source"] = source
+            captured["options"] = options
+            segment = SimpleNamespace(
+                start=0.1,
+                end=1.2,
+                text="Halo dunia.",
+                words=[
+                    SimpleNamespace(start=0.1, end=0.45, word=" Halo", probability=0.98),
+                    SimpleNamespace(start=0.5, end=0.9, word=" dunia.", probability=0.95),
+                    SimpleNamespace(start=float("nan"), end=1.0, word="invalid", probability=0.8),
+                    SimpleNamespace(start=1.0, end=1.1, word="bad-confidence", probability=1.5),
+                ],
+            )
+            info = SimpleNamespace(duration=2.0, language="id", language_probability=0.99)
+            return iter([segment]), info
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=FakeWhisperModel))
+    progress_values = []
+    source = tmp_path / "voice.mp4"
+    source.write_bytes(b"video")
+
+    result = transcription.transcribe_file(
+        source, model_name="tiny", language="id", progress=progress_values.append
+    )
+
+    assert captured["options"]["word_timestamps"] is True
+    assert captured["options"]["vad_filter"] is True
+    assert result["segments"][0]["words"] == [
+        {"start": 0.1, "end": 0.45, "text": "Halo", "probability": 0.98},
+        {"start": 0.5, "end": 0.9, "text": "dunia.", "probability": 0.95},
+    ]
+    assert progress_values[-1] == 1.0
+
+
+def test_ensure_storage_migrates_legacy_transcript_database(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        timestamp = main_module.now_iso()
+        with database.get_connection() as connection:
+            job_id = str(uuid.uuid4())
+            connection.execute(
+                """INSERT INTO transcription_jobs(id,media_id,status,model_name,created_at,updated_at)
+                   VALUES(?,?,'completed','tiny',?,?)""",
+                (job_id, media_id, timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
+                (job_id, 0.1, 1.2, "Legacy words are not available"),
+            )
+            connection.execute("DROP TABLE transcript_words")
+
+        database.ensure_storage()
+
+        with database.get_connection() as connection:
+            columns = connection.execute("PRAGMA table_info(transcript_words)").fetchall()
+            assert {row["name"] for row in columns} >= {
+                "job_id", "segment_id", "word_index", "start", "end", "text", "probability"
+            }
+        response = client.get(f"/api/transcriptions/{job_id}")
+        assert response.status_code == 200
+        assert response.json()["segments"][0]["text"] == "Legacy words are not available"
+        assert response.json()["segments"][0]["words"] == []

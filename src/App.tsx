@@ -626,6 +626,7 @@ function App() {
       setTranscription(result as Transcription);
       setWordTiming(previous=>{const copy={...previous};delete copy[key];return copy;});
     } catch(error) {
+      setWordTiming(previous=>{const copy={...previous};delete copy[key];return copy;});
       setError(error instanceof Error ? error.message : "Gagal menyimpan timing kata.");
     } finally {setWordBusy("");}
   }
@@ -651,6 +652,7 @@ function App() {
     wordIndex: number,
     mode: "move" | "start" | "end",
   ) {
+    if (wordBusy) return;
     event.preventDefault();
     event.stopPropagation();
     const lane = event.currentTarget.closest(".word-timing-lane") as HTMLDivElement | null;
