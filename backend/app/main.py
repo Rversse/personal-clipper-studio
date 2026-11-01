@@ -390,6 +390,7 @@ def normalize_candidate(
     chunk: list[dict],
     min_duration: int,
     max_duration: int,
+    context_segments: list[dict] | None = None,
 ) -> dict | None:
     import math
 
@@ -411,7 +412,7 @@ def normalize_candidate(
         return None
 
     refined = refine_candidate_boundaries(
-        target_start, target_end, chunk, min_duration, max_duration
+        target_start, target_end, context_segments or chunk, min_duration, max_duration
     )
     if refined is None:
         return None
@@ -485,7 +486,8 @@ def run_discovery_job(job_id: str) -> None:
                 if not isinstance(raw, dict):
                     continue
                 candidate = normalize_candidate(
-                    raw, chunk, job["min_duration"], job["max_duration"]
+                    raw, chunk, job["min_duration"], job["max_duration"],
+                    context_segments=transcript,
                 )
                 if candidate is None or candidate["score"] < 40:
                     continue
