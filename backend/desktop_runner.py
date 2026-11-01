@@ -51,7 +51,8 @@ def main(argv: list[str] | None = None) -> None:
             if sys.platform == "win32":
                 from keyring.backends.Windows import WinVaultKeyring
 
-                WinVaultKeyring()
+                if WinVaultKeyring.priority <= 0:
+                    raise RuntimeError("Windows Credential Manager backend is unavailable.")
         except (ImportError, OSError) as error:
             raise SystemExit(
                 f"Packaged transcription runtime is incomplete: {error}"
