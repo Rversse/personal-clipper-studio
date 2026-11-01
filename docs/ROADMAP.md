@@ -65,6 +65,8 @@
 - [x] Desktop System Check page for required/optional software, detection status, installation notes, and official download links; refreshable after installation
 - [x] Loopback-only Ollama server/model readiness check with explicit missing-model and unreachable states
 - [x] Whisper model cache detection and selected-model disk-space preflight; block a new transcription when known free space is below the estimated download plus a 512 MB reserve
+- [x] Gemini API key configuration UI with Windows Credential Manager storage, environment-variable precedence, safe status reporting, replace/delete controls, and read-only HTTPS model-access test
+- [x] Windows packaged-runtime smoke test for Credential Manager availability and secret save/read/delete round-trip
 - [ ] Error recovery and cancellation
 - [x] Windows NSIS/MSI CI packaging with a PyInstaller-bundled FastAPI service, packaged-runtime health/SQLite smoke test, and silent installer install/launch/API/SQLite/uninstall validation on a hosted Windows runner
 - [x] Tauri-managed Windows backend startup/shutdown, loopback binding, port-collision guard, and persistent backend log
