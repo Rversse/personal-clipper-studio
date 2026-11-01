@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 
 from app import database
@@ -105,3 +103,37 @@ def test_media_import_removes_staged_file_when_upload_exceeds_limit(tmp_path, mo
     assert response.status_code == 413
     assert list(media_dir.iterdir()) == []
     assert list(thumbnail_dir.iterdir()) == []
+
+
+
+def test_media_import_cleans_published_files_when_database_insert_fails(tmp_path, monkeypatch):
+    media_dir, thumbnail_dir = setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        main_module,
+        "probe_media",
+        lambda _path: {
+            "duration": 12.0, "width": 1920, "height": 1080, "fps": 30.0,
+            "video_codec": "h264", "audio_codec": "aac",
+        },
+    )
+    monkeypatch.setattr(main_module, "create_thumbnail", lambda _source, _destination: False)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        project_id = create_project(client)
+        with database.get_connection() as connection:
+            connection.execute(
+                """CREATE TRIGGER reject_media_import
+                   BEFORE INSERT ON media_assets
+                   BEGIN SELECT RAISE(ABORT, 'simulated database failure'); END"""
+            )
+
+        response = client.post(
+            f"/api/projects/{project_id}/media",
+            files={"file": ("sample.mp4", b"video-content", "video/mp4")},
+        )
+
+    assert response.status_code == 500
+    assert list(media_dir.iterdir()) == []
+    assert list(thumbnail_dir.iterdir()) == []
+    with database.get_connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0] == 0
