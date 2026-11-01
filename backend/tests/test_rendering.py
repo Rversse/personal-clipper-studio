@@ -365,8 +365,8 @@ def test_export_api_persists_ordered_clip_sequence(tmp_path, monkeypatch):
             ).fetchone()
         import json
         assert json.loads(row["clip_segments"]) == [
-            {"start": 30.0, "end": 40.0, "crop_zoom": 1.0, "crop_x": 0.5, "crop_y": 0.5},
-            {"start": 5.0, "end": 15.0, "crop_zoom": 1.0, "crop_x": 0.5, "crop_y": 0.5},
+            {"start": 30.0, "end": 40.0, "crop_zoom": 1.0, "crop_x": 0.5, "crop_y": 0.5, "audio_volume": 1.0},
+            {"start": 5.0, "end": 15.0, "crop_zoom": 1.0, "crop_x": 0.5, "crop_y": 0.5, "audio_volume": 1.0},
         ]
         assert row["start_seconds"] == 5
         assert row["end_seconds"] == 40
@@ -671,8 +671,8 @@ def test_export_api_persists_per_clip_crop_and_uses_global_fallback(tmp_path, mo
             ).fetchone()
         import json
         assert json.loads(row["clip_segments"]) == [
-            {"start": 30.0, "end": 40.0, "crop_zoom": 2.2, "crop_x": 0.1, "crop_y": 0.9},
-            {"start": 5.0, "end": 15.0, "crop_zoom": 1.4, "crop_x": 0.35, "crop_y": 0.65},
+            {"start": 30.0, "end": 40.0, "crop_zoom": 2.2, "crop_x": 0.1, "crop_y": 0.9, "audio_volume": 1.0},
+            {"start": 5.0, "end": 15.0, "crop_zoom": 1.4, "crop_x": 0.35, "crop_y": 0.65, "audio_volume": 1.0},
         ]
 
 
