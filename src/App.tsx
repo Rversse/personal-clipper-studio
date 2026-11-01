@@ -17,6 +17,7 @@ type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: nu
 type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; output_preset?:string; quality_profile?:string; frame_rate?:number|null; normalize_audio?:boolean; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string;boundary_quality:number;opening_boundary:string;ending_boundary:string;context_note:string}[] };
 type RuntimeDependency = { id:string; name:string; required:boolean; available:boolean; status:string; description:string; download_url:string|null; download_label:string|null; install_note:string };
+type GeminiSettings = { provider:string; model:string|null; configured:boolean; source:string; credential_store_available:boolean; managed_by_environment:boolean };
 type RuntimeDiagnostics = { platform:string; ffmpeg:{available:boolean;version:string|null}; ffprobe:{available:boolean;version:string|null}; dependencies:RuntimeDependency[]; transcription:{installed:boolean;device:string;compute_type:string;model_downloaded:boolean|null;model_preflight:{model:string;downloaded:boolean;cache_configured:boolean;free_bytes:number|null;estimated_download_bytes:number;required_free_bytes:number;disk_space_ok:boolean;disk_space_known:boolean}}; ai:{provider:string;model:string|null;configured:boolean;status:string;ollama_connection:string;ollama_model_available:boolean|null;ollama_models:string[]} };
 
 const navItems = [
@@ -44,6 +45,12 @@ function App() {
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnostics | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState("");
+  const [geminiSettings, setGeminiSettings] = useState<GeminiSettings | null>(null);
+  const [geminiSettingsLoading, setGeminiSettingsLoading] = useState(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState("");
+  const [geminiKeyBusy, setGeminiKeyBusy] = useState(false);
+  const [geminiKeyMessage, setGeminiKeyMessage] = useState("");
+  const [geminiKeyError, setGeminiKeyError] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
   const [media, setMedia] = useState<Media[]>([]);
@@ -181,6 +188,83 @@ function App() {
   useEffect(() => {
     if (active === "Settings" || active === "AI Workspace" && aiMediaId) void loadRuntimeDiagnostics();
   }, [active, aiMediaId, loadRuntimeDiagnostics]);
+
+  const loadGeminiSettings = useCallback(async () => {
+    setGeminiSettingsLoading(true);
+    setGeminiKeyError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Gagal membaca status Gemini API key.");
+      setGeminiSettings(payload as GeminiSettings);
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Gagal membaca konfigurasi Gemini.");
+    } finally {
+      setGeminiSettingsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (active === "Settings") void loadGeminiSettings();
+  }, [active, loadGeminiSettings]);
+
+  const saveGeminiKey = async () => {
+    setGeminiKeyBusy(true);
+    setGeminiKeyError("");
+    setGeminiKeyMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: geminiKeyInput })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Gagal menyimpan Gemini API key.");
+      setGeminiSettings(payload as GeminiSettings);
+      setGeminiKeyInput("");
+      setGeminiKeyMessage("API key tersimpan di Windows Credential Manager.");
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Gagal menyimpan Gemini API key.");
+    } finally {
+      setGeminiKeyBusy(false);
+    }
+  };
+
+  const removeGeminiKey = async () => {
+    if (!window.confirm("Hapus Gemini API key dari Windows Credential Manager?")) return;
+    setGeminiKeyBusy(true);
+    setGeminiKeyError("");
+    setGeminiKeyMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-key`, { method: "DELETE" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Gagal menghapus Gemini API key.");
+      setGeminiSettings(payload as GeminiSettings);
+      setGeminiKeyInput("");
+      setGeminiKeyMessage("API key dihapus dari Windows Credential Manager.");
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Gagal menghapus Gemini API key.");
+    } finally {
+      setGeminiKeyBusy(false);
+    }
+  };
+
+  const testGeminiKey = async () => {
+    setGeminiKeyBusy(true);
+    setGeminiKeyError("");
+    setGeminiKeyMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-test`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Uji koneksi Gemini gagal.");
+      if (payload.success) setGeminiKeyMessage(payload.message || "Koneksi Gemini berhasil.");
+      else setGeminiKeyError(payload.message || "Koneksi Gemini gagal.");
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Uji koneksi Gemini gagal.");
+    } finally {
+      setGeminiKeyBusy(false);
+    }
+  };
 
   const loadMedia = useCallback(async (project: Project) => {
     setLoading(true); setError("");
@@ -1251,6 +1335,26 @@ function App() {
                 <div className="runtime-dependency-list">{runtimeDiagnostics.dependencies.map(item=><article className="runtime-dependency-card" key={item.id}><div className="runtime-dependency-top"><div><span className="runtime-dependency-kind">{item.required ? "REQUIRED" : "OPTIONAL"}</span><h4>{item.name}</h4></div><span className={"runtime-status "+(item.available ? "ready" : item.required ? "missing" : "optional")}>{item.available ? "Available" : item.required ? "Not detected" : "Optional · not installed"}</span></div><p>{item.description}</p>{item.id === "ffmpeg" && <small className="runtime-version-info">FFmpeg: {runtimeDiagnostics.ffmpeg.available ? runtimeDiagnostics.ffmpeg.version ?? "Detected" : "Missing"} · FFprobe: {runtimeDiagnostics.ffprobe.available ? runtimeDiagnostics.ffprobe.version ?? "Detected" : "Missing"}</small>}{!item.available && <div className="runtime-install-note">{item.install_note}</div>}{!item.available && item.download_url && <a className="runtime-download-link" href={item.download_url} target="_blank" rel="noreferrer">{item.download_label ?? "Open download page"} <ArrowRight size={14}/></a>}</article>)}</div>
                 <div className="runtime-section-heading"><div><h3>AI & transcription</h3><p>Konfigurasi provider dan mesin transkripsi.</p></div></div>
                 <div className="runtime-detail-grid"><article className="runtime-detail-card"><span className="muted-label">WHISPER ENGINE</span><strong>{runtimeDiagnostics.transcription.installed ? "Installed" : "Unavailable"}</strong><p>Device: {runtimeDiagnostics.transcription.device} · Compute: {runtimeDiagnostics.transcription.compute_type}</p><p>Model pilihan: {runtimeDiagnostics.transcription.model_preflight.model} · {runtimeDiagnostics.transcription.model_preflight.downloaded ? "Sudah ada di cache" : "Belum diunduh"}</p><small>{runtimeDiagnostics.transcription.model_preflight.downloaded ? "Model siap digunakan tanpa unduhan tambahan." : "Estimasi unduhan: " + (runtimeDiagnostics.transcription.model_preflight.estimated_download_bytes / 1024**2).toFixed(0) + " MB. " + (runtimeDiagnostics.transcription.model_preflight.disk_space_known ? "Ruang kosong: " + (runtimeDiagnostics.transcription.model_preflight.free_bytes! / 1024**3).toFixed(2) + " GB · " + (runtimeDiagnostics.transcription.model_preflight.disk_space_ok ? "cukup termasuk cadangan 512 MB." : "tidak cukup, pilih model lebih kecil atau kosongkan disk.") : "Ruang disk tidak dapat dibaca; sistem tidak akan memblokir proses hanya berdasarkan nilai yang tidak diketahui.")}</small></article><article className="runtime-detail-card"><span className="muted-label">AI PROVIDER</span><strong>{runtimeDiagnostics.ai.provider} · {runtimeDiagnostics.ai.configured ? "Configured" : "Needs configuration"}</strong><p>Model: {runtimeDiagnostics.ai.model ?? "Default / not set"}</p><small>{runtimeDiagnostics.ai.provider === "ollama" ? (runtimeDiagnostics.ai.ollama_connection === "connected" ? (runtimeDiagnostics.ai.ollama_model_available ? "Ollama server terhubung dan model pilihan tersedia." : "Ollama server terhubung, tetapi model pilihan belum diunduh.") : runtimeDiagnostics.ai.ollama_connection === "not_tested_unsafe_endpoint" ? "Endpoint Ollama bukan alamat loopback lokal yang diizinkan; koneksi tidak diuji." : "Ollama belum terjangkau. Pastikan aplikasi Ollama berjalan, lalu tekan Check again.") : "Gemini memerlukan API key. Pemeriksaan ini tidak menampilkan atau mengirim API key."}</small></article></div>
+                <div className="runtime-section-heading"><div><h3>Gemini API configuration</h3><p>API key disimpan secara lokal menggunakan Windows Credential Manager.</p></div></div>
+                <article className="gemini-settings-card">
+                  <div className="gemini-settings-status">
+                    <span className="muted-label">CREDENTIAL STATUS</span>
+                    <strong>{geminiSettingsLoading ? "Memeriksa..." : !geminiSettings ? "Status tidak tersedia" : geminiSettings.configured ? (geminiSettings.source === "environment" ? "Dikelola environment" : "Tersimpan aman") : "Belum dikonfigurasi"}</strong>
+                    <small>{geminiSettings?.source === "environment" ? "Environment variable PCS_GEMINI_API_KEY aktif dan memiliki prioritas. Kelola key dari environment, bukan dari aplikasi." : geminiSettings?.credential_store_available ? "Key tersimpan di Windows Credential Manager untuk akun Windows saat ini. Nilai key tidak pernah dikirim kembali ke UI." : "Windows Credential Manager tidak tersedia. Pengelolaan key melalui aplikasi hanya didukung pada Windows."}</small>
+                  </div>
+                  <form className="gemini-key-form" onSubmit={(event)=>{event.preventDefault();void saveGeminiKey();}}>
+                    <label htmlFor="gemini-api-key">Gemini API key</label>
+                    <input id="gemini-api-key" type="password" value={geminiKeyInput} onChange={event=>setGeminiKeyInput(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder={geminiSettings?.configured ? "Masukkan key baru untuk mengganti" : "Paste Gemini API key"} disabled={geminiKeyBusy || !geminiSettings?.credential_store_available || geminiSettings.managed_by_environment} />
+                    <div className="gemini-key-actions">
+                      <button className="primary-button" type="submit" disabled={geminiKeyBusy || !geminiKeyInput.trim() || !geminiSettings?.credential_store_available || geminiSettings.managed_by_environment}>{geminiKeyBusy ? "Memproses..." : geminiSettings?.configured ? "Ganti API key" : "Simpan API key"}</button>
+                      <button className="secondary-button" type="button" onClick={()=>void testGeminiKey()} disabled={geminiKeyBusy || !geminiSettings?.configured}>Test connection</button>
+                      {geminiSettings?.configured && !geminiSettings.managed_by_environment && <button className="text-button" type="button" onClick={()=>void removeGeminiKey()} disabled={geminiKeyBusy}>Hapus key</button>}
+                    </div>
+                  </form>
+                  {geminiKeyMessage && <p className="gemini-feedback success">{geminiKeyMessage}</p>}
+                  {geminiKeyError && <p className="gemini-feedback error">{geminiKeyError}</p>}
+                  <small className="gemini-security-note">Uji koneksi hanya meminta metadata model dari Google untuk memvalidasi akses. Tidak menjalankan prompt, tidak memakai token generasi, dan API key dikirim melalui HTTPS header—bukan URL.</small>
+                </article>
                 <p className="runtime-footnote">Catatan: pemeriksaan ini membaca kondisi lokal, bukan menginstal software secara otomatis. Setelah memasang FFmpeg, pastikan folder bin masuk ke PATH lalu restart aplikasi dan tekan Check again. Python runtime sudah dibundel pada installer Windows.</p>
               </>}
             </section>
