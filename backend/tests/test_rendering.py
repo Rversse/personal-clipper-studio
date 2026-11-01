@@ -38,6 +38,72 @@ def seed_media():
     return media_id
 
 
+def _seed_interrupted_export(job_id, output_name):
+    timestamp = "2026-11-01T00:00:00+00:00"
+    with database.get_connection() as connection:
+        media = connection.execute("SELECT id FROM media_assets LIMIT 1").fetchone()
+        if media is None:
+            raise AssertionError("Test media must be seeded before creating an export job.")
+        connection.execute(
+            """INSERT INTO export_jobs(
+                id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
+                progress,created_at,updated_at
+            ) VALUES(?,?,'processing',0,30,'9:16',?,0.65,?,?)""",
+            (job_id, media["id"], output_name, timestamp, timestamp),
+        )
+
+
+def test_recovery_requeues_interrupted_render_and_removes_only_its_temp_files(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    database.ensure_storage()
+    seed_media()
+    job_id = str(uuid.uuid4())
+    output_name = f"clip-{job_id}.mp4"
+    destination = database.EXPORT_DIR / output_name
+    _seed_interrupted_export(job_id, output_name)
+
+    partial = destination.with_name(destination.stem + ".partial" + destination.suffix)
+    part = destination.parent / f".{destination.stem}-stale-001.mp4"
+    concat = destination.parent / f".{destination.stem}-stale.ffconcat"
+    subtitle = destination.parent / f".{destination.stem}-stale.ass"
+    unrelated = destination.parent / ".clip-another-job-stale-001.mp4"
+    for path in (partial, part, concat, subtitle, unrelated):
+        path.write_bytes(b"temporary")
+
+    main_module.recover_interrupted_exports()
+
+    with database.get_connection() as connection:
+        job = connection.execute("SELECT * FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+    assert job["status"] == "queued"
+    assert job["progress"] == 0
+    assert job["encoder"] is None
+    assert job["error"] is None
+    for path in (partial, part, concat, subtitle):
+        assert not path.exists()
+    assert unrelated.exists()
+
+
+def test_recovery_keeps_atomically_committed_mp4_and_marks_job_completed(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    database.ensure_storage()
+    seed_media()
+    job_id = str(uuid.uuid4())
+    output_name = f"clip-{job_id}.mp4"
+    destination = database.EXPORT_DIR / output_name
+    _seed_interrupted_export(job_id, output_name)
+    destination.write_bytes(b"\\x00\\x00\\x00\\x18ftypisom" + b"x" * 1200)
+
+    main_module.recover_interrupted_exports()
+
+    with database.get_connection() as connection:
+        job = connection.execute("SELECT * FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+    assert job["status"] == "completed"
+    assert job["progress"] == 1
+    assert job["error"] is None
+    assert destination.is_file()
+    assert destination.stat().st_size > 1024
+
+
 def test_render_command_has_trim_crop_and_safe_audio_mapping(tmp_path):
     command = rendering.build_render_command(
         tmp_path / "source.mp4", tmp_path / "output.mp4", 5, 35, "9:16", "libx264"
