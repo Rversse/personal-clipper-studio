@@ -85,7 +85,10 @@ def transcribe_file(
     model_name: str = "small",
     language: str | None = None,
     progress: Callable[[float], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
+    if cancel_check:
+        cancel_check()
     try:
         from faster_whisper import WhisperModel
     except (ImportError, OSError) as error:
@@ -107,6 +110,8 @@ def transcribe_file(
     device = os.environ.get("PCS_WHISPER_DEVICE", "auto")
     compute_type = os.environ.get("PCS_WHISPER_COMPUTE_TYPE", "default")
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    if cancel_check:
+        cancel_check()
     segments, info = model.transcribe(
         str(path),
         language=language or None,
@@ -117,6 +122,8 @@ def transcribe_file(
     results: list[dict[str, Any]] = []
     duration = float(info.duration or 0)
     for segment in segments:
+        if cancel_check:
+            cancel_check()
         segment_start = float(segment.start)
         segment_end = float(segment.end)
         normalized_words: list[dict[str, Any]] = []
@@ -153,6 +160,8 @@ def transcribe_file(
         if progress and duration > 0:
             progress(min(0.99, float(segment.end) / duration))
 
+    if cancel_check:
+        cancel_check()
     if progress:
         progress(1.0)
     return {
