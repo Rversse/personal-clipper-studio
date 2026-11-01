@@ -430,7 +430,7 @@ def validate_mp4_output(path: Path, expected_duration: float | None = None) -> d
     if not math.isfinite(duration) or duration <= 0 or width <= 0 or height <= 0:
         raise RenderError("Hasil render tidak memiliki durasi atau stream video yang valid.")
     if expected_duration is not None:
-        tolerance = max(0.75, expected_duration * 0.05)
+        tolerance = max(0.5, expected_duration * 0.03)
         if not math.isfinite(expected_duration) or expected_duration <= 0 or abs(duration - expected_duration) > tolerance:
             raise RenderError("Durasi hasil render tidak sesuai dengan durasi klip yang diminta.")
     return {"duration": duration, "width": width, "height": height}
