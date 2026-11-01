@@ -659,8 +659,7 @@ function App() {
           cropY, audioVolume, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
         }));
         setEditorSaved(true);
-        const savedTimer = window.setTimeout(() => setEditorSaved(false), 1800);
-        return () => window.clearTimeout(savedTimer);
+        window.setTimeout(() => setEditorSaved(false), 1800);
       } catch {
         setError("Draft editor tidak dapat disimpan ke penyimpanan lokal browser.");
       }
@@ -1357,10 +1356,10 @@ function App() {
                   </div>
                   <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
                   <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
-                  <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save editing draft</button>
+                  <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save now</button>
                   <button className="secondary-button editor-save" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting export..." : clipSequence.length ? `Render ${clipSequence.length} clips` : "Render this clip"} <ArrowDownToLine size={14}/></button>
                   {editorSaved && <small className="save-confirmation">Draft tersimpan di perangkat ini.</small>}
-                  <p className="editor-disclaimer">Pengaturan edit tersimpan lokal. Rendering dan crop/reposition masuk ke Phase 5.</p>
+                  <p className="editor-disclaimer">Perubahan tersimpan otomatis di perangkat ini. Gunakan Save now untuk menyimpan langsung.</p>
                 </aside>
               </div>}
             </section>
