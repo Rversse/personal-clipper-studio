@@ -1,0 +1,104 @@
+import os
+import tempfile
+
+# Isolate SQLite state before importing the application module.
+os.environ.setdefault("PCS_DATA_DIR", tempfile.mkdtemp(prefix="pcs-media-security-tests-"))
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import main
+from app.main import app
+
+
+@pytest.fixture()
+def client(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "probe_media",
+        lambda _path: {
+            "available": True,
+            "duration": 1.0,
+            "width": 1280,
+            "height": 720,
+            "fps": 30.0,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        },
+    )
+    monkeypatch.setattr(main, "create_thumbnail", lambda _source, _destination: False)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.mark.parametrize(
+    ("extension", "expected_type"),
+    [
+        (".mp4", "video/mp4"),
+        (".mov", "video/quicktime"),
+        (".mkv", "video/x-matroska"),
+        (".webm", "video/webm"),
+        (".avi", "video/x-msvideo"),
+        (".m4v", "video/mp4"),
+        (".mpeg", "video/mpeg"),
+        (".mpg", "video/mpeg"),
+    ],
+)
+def test_uploaded_media_uses_server_controlled_mime_type(client, extension, expected_type):
+    project = client.post(
+        "/api/projects",
+        json={"name": f"MIME security {extension}", "description": ""},
+    )
+    assert project.status_code == 201
+
+    uploaded = client.post(
+        f"/api/projects/{project.json()['id']}/media",
+        files={"file": (f"sample{extension}", b"test media bytes", "text/html")},
+    )
+    assert uploaded.status_code == 201
+    media = uploaded.json()
+
+    assert media["mime_type"] == expected_type
+
+    response = client.get(media["preview_url"])
+    assert response.status_code == 200
+    assert response.headers["content-type"].split(";")[0] == expected_type
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_export_download_sets_nosniff_header(client, monkeypatch, tmp_path):
+    # A completed export is served with a fixed video MIME type and download name.
+    project = client.post(
+        "/api/projects",
+        json={"name": "Export header security", "description": ""},
+    )
+    assert project.status_code == 201
+
+    uploaded = client.post(
+        f"/api/projects/{project.json()['id']}/media",
+        files={"file": ("sample.mp4", b"test media bytes", "text/html")},
+    )
+    assert uploaded.status_code == 201
+
+    from app.database import EXPORT_DIR, get_connection
+    import uuid
+    from datetime import datetime, timezone
+
+    job_id = str(uuid.uuid4())
+    output_name = f"clip-{job_id}.mp4"
+    (EXPORT_DIR / output_name).write_bytes(b"x" * 2048)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with get_connection() as connection:
+        connection.execute(
+            """INSERT INTO export_jobs(
+                id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
+                created_at,updated_at
+            ) VALUES(?,?,'completed',0,1,'9:16',?,?,?)""",
+            (job_id, uploaded.json()["id"], output_name, timestamp, timestamp),
+        )
+
+    response = client.get(f"/api/exports/{job_id}/file")
+    assert response.status_code == 200
+    assert response.headers["content-type"].split(";")[0] == "video/mp4"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "attachment" in response.headers["content-disposition"]
