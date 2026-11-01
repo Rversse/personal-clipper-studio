@@ -262,13 +262,25 @@ def build_render_command(
     return command
 
 
-def _execute(command: list[str], duration: float, progress: Callable[[float], None] | None) -> None:
+def _execute(
+    command: list[str],
+    duration: float,
+    progress: Callable[[float], None] | None,
+    control: RenderControl | None = None,
+) -> None:
+    if control:
+        control.check()
+    process: subprocess.Popen | None = None
+    reader: threading.Thread | None = None
     try:
         with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as error_log:
             process = subprocess.Popen(
                 command, stdout=subprocess.PIPE, stderr=error_log,
                 text=True, encoding="utf-8", errors="replace",
             )
+            if control:
+                control.attach(process)
+                control.check()
             if process.stdout is None:
                 process.kill()
                 raise RenderError("FFmpeg tidak menyediakan stream progress.")
@@ -287,13 +299,15 @@ def _execute(command: list[str], duration: float, progress: Callable[[float], No
             last_progress = 0.0
             stream_finished = False
             while not stream_finished:
+                if control:
+                    control.check()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     process.kill()
                     process.wait()
                     raise RenderError("Rendering melewati batas waktu 6 jam.")
                 try:
-                    line = events.get(timeout=min(1.0, remaining))
+                    line = events.get(timeout=min(0.5, remaining))
                 except queue.Empty:
                     continue
                 if line is None:
@@ -308,6 +322,8 @@ def _execute(command: list[str], duration: float, progress: Callable[[float], No
                     if current > last_progress:
                         last_progress = current
                         progress(current)
+            if control:
+                control.check()
             try:
                 process.wait(timeout=max(0.01, deadline - time.monotonic()))
             except subprocess.TimeoutExpired as error:
@@ -315,12 +331,28 @@ def _execute(command: list[str], duration: float, progress: Callable[[float], No
                 process.wait()
                 raise RenderError("Rendering melewati batas waktu 6 jam.") from error
             reader.join(timeout=2)
+            if control:
+                control.check()
             if process.returncode != 0:
                 error_log.seek(0)
                 detail = error_log.read()[-3000:]
                 raise RenderError(detail.strip() or f"FFmpeg berhenti dengan kode {process.returncode}.")
     except OSError as error:
+        if control and control._cancelled.is_set():
+            raise RenderCancelled("Export dibatalkan oleh pengguna.") from error
         raise RenderError(f"Gagal menjalankan FFmpeg: {error}") from error
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                    process.wait(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            if control:
+                control.detach(process)
+        if reader is not None:
+            reader.join(timeout=2)
 
 
 def render_clip(
