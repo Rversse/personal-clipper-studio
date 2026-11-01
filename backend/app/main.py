@@ -483,6 +483,18 @@ async def start_transcription(
             status_code=503,
             detail="Whisper belum terpasang. Install dengan: pip install -e \"backend[transcription]\"",
         )
+    model_preflight = transcription.whisper_model_preflight(payload.model_name)
+    if model_preflight["disk_space_known"] and not model_preflight["disk_space_ok"]:
+        required_mb = (model_preflight["required_free_bytes"] + 1024**2 - 1) // 1024**2
+        free_mb = model_preflight["free_bytes"] // 1024**2
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Ruang disk tidak cukup untuk model Whisper {payload.model_name}. "
+                f"Perlu sekitar {required_mb} MB ruang kosong; tersedia {free_mb} MB. "
+                "Kosongkan ruang disk atau pilih model yang lebih kecil."
+            ),
+        )
     job_id = str(uuid.uuid4())
     timestamp = now_iso()
     with get_connection() as connection:
