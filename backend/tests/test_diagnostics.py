@@ -21,6 +21,12 @@ def test_gemini_diagnostics_reports_missing_key_without_exposing_secret(monkeypa
     assert "never-return-this-secret" not in repr(result)
     assert result["ffmpeg"]["available"] is True
     assert result["transcription"]["installed"] is True
+    dependencies = {item["id"]: item for item in result["dependencies"]}
+    assert dependencies["ffmpeg"]["available"] is True
+    assert dependencies["ffmpeg"]["required"] is True
+    assert dependencies["whisper"]["available"] is True
+    assert dependencies["ollama"]["required"] is False
+    assert dependencies["ffmpeg"]["download_url"].startswith("https://")
 
 
 def test_gemini_diagnostics_identifies_missing_api_key(monkeypatch):
@@ -36,6 +42,9 @@ def test_gemini_diagnostics_identifies_missing_api_key(monkeypatch):
     assert result["ai"]["status"] == "missing_api_key"
     assert result["transcription"]["installed"] is False
     assert result["ffprobe"]["available"] is False
+    dependencies = {item["id"]: item for item in result["dependencies"]}
+    assert dependencies["ffmpeg"]["available"] is False
+    assert dependencies["whisper"]["available"] is False
 
 
 def test_ollama_diagnostics_does_not_claim_server_is_connected(monkeypatch):
