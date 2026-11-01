@@ -820,3 +820,124 @@ def test_export_api_rejects_edited_caption_outside_source_duration(tmp_path, mon
         )
         assert response.status_code == 422
         assert "subtitle" in response.json()["detail"].lower()
+
+
+def test_render_command_applies_quality_frame_rate_and_loudness_options(tmp_path):
+    base = dict(
+        source=tmp_path / "source.mp4",
+        destination=tmp_path / "output.mp4",
+        start_seconds=0,
+        end_seconds=10,
+        aspect_ratio="9:16",
+        encoder="libx264",
+    )
+    high = rendering.build_render_command(
+        **base, quality_profile="high", frame_rate=60, normalize_audio=True
+    )
+    assert high[high.index("-vf") + 1].endswith("setsar=1,fps=60")
+    assert high[high.index("-preset") + 1] == "slow"
+    assert high[high.index("-crf") + 1] == "18"
+    assert high[high.index("-af") + 1] == "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+    combined = rendering.build_render_command(
+        **base, audio_volume=0.5, normalize_audio=True,
+        quality_profile="maximum", frame_rate=24,
+    )
+    assert combined[combined.index("-af") + 1] == "volume=0.5000,loudnorm=I=-16:TP=-1.5:LRA=11"
+    assert combined[combined.index("-preset") + 1] == "slower"
+    assert combined[combined.index("-crf") + 1] == "15"
+    assert combined[combined.index("-vf") + 1].endswith("setsar=1,fps=24")
+
+    source_fps = rendering.build_render_command(**base, frame_rate=None)
+    assert not source_fps[ source_fps.index("-vf") + 1 ].endswith(",fps=30")
+
+
+def test_render_command_rejects_unsupported_quality_and_frame_rate(tmp_path):
+    base = dict(
+        source=tmp_path / "source.mp4",
+        destination=tmp_path / "output.mp4",
+        start_seconds=0,
+        end_seconds=10,
+        aspect_ratio="9:16",
+        encoder="libx264",
+    )
+    for options in [{"quality_profile": "ultra"}, {"frame_rate": 25}]:
+        try:
+            rendering.build_render_command(**base, **options)
+        except rendering.RenderError:
+            pass
+        else:
+            raise AssertionError("Unsupported rendering options must be rejected")
+
+
+def test_render_sequence_propagates_quality_frame_rate_and_audio_normalization(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(rendering.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    calls = []
+
+    def fake_render(source_path, output_path, start, end, ratio, progress=None, **kwargs):
+        calls.append(kwargs.copy())
+        output_path.write_bytes(b"x" * 2048)
+        return {"encoder": "libx264", "output": str(output_path)}
+
+    def fake_concat(command, duration, progress, control=None):
+        Path(command[-1]).write_bytes(b"y" * 4096)
+
+    monkeypatch.setattr(rendering, "render_clip", fake_render)
+    monkeypatch.setattr(rendering, "_execute", fake_concat)
+    rendering.render_sequence(
+        source, destination, [{"start": 0, "end": 5}], "9:16",
+        quality_profile="high", frame_rate=60, normalize_audio=True,
+    )
+    assert calls[0]["quality_profile"] == "high"
+    assert calls[0]["frame_rate"] == 60
+    assert calls[0]["normalize_audio"] is True
+
+
+def test_export_api_persists_advanced_render_settings_and_returns_them(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 5, "end_seconds": 30, "aspect_ratio": "9:16",
+                "output_preset": "instagram_reels",
+                "quality_profile": "maximum", "frame_rate": 60, "normalize_audio": True,
+            },
+        )
+        assert response.status_code == 202
+        payload = response.json()
+        assert payload["output_preset"] == "instagram_reels"
+        assert payload["quality_profile"] == "maximum"
+        assert payload["frame_rate"] == 60
+        assert payload["normalize_audio"] is True
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT render_settings FROM export_jobs WHERE id=?", (payload["id"],)
+            ).fetchone()
+        import json
+        assert json.loads(row["render_settings"]) == {
+            "output_preset": "instagram_reels", "quality_profile": "maximum",
+            "frame_rate": 60, "normalize_audio": True,
+        }
+
+
+def test_export_api_rejects_platform_preset_with_mismatched_aspect_ratio(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 5, "end_seconds": 30, "aspect_ratio": "1:1",
+                "output_preset": "youtube_shorts",
+            },
+        )
+        assert response.status_code == 422
+        assert "Rasio aspek" in response.json()["detail"]
