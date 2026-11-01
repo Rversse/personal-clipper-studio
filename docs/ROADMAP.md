@@ -38,7 +38,9 @@
 - [x] Per-clip audio gain and mute controls persisted in the sequence and applied by FFmpeg
 - [x] Direct caption move/trim on the timeline, precise IN/OUT controls, local draft persistence, and burn-in timestamp propagation
 - [ ] Separate audio sources, audio fades, and full independent audio-track assembly
-- [ ] Safe context-aware clip boundaries
+- [x] Context-aware AI candidate boundary refinement using punctuation, natural pauses, conjunction and sentence-continuation signals
+- [x] Persist/display boundary quality score and opening/ending rationale on candidates
+- [ ] Word-level boundary alignment and prosody-aware semantic cut detection
 
 ## Phase 5 — rendering and delivery (partial)
 - [x] Single-clip and ordered multi-clip FFmpeg H.264 MP4 render pipeline with atomic output replacement
