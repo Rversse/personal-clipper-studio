@@ -7,6 +7,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from . import credentials
+
 
 DISCOVERY_SCHEMA = {
     "type": "object",
@@ -45,13 +47,13 @@ def provider_settings() -> dict[str, str]:
     if provider not in {"gemini", "ollama"}:
         raise DiscoveryProviderError("Provider AI tidak dikenal. Pilih gemini atau ollama.")
     if provider == "gemini":
-        api_key = os.environ.get("PCS_GEMINI_API_KEY", "").strip()
+        api_key = credentials.get_gemini_api_key() or ""
         model = os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
         if not model:
             raise DiscoveryProviderError("PCS_GEMINI_MODEL tidak boleh kosong.")
         if not api_key:
             raise DiscoveryProviderError(
-                "Gemini API key belum dikonfigurasi. Set PCS_GEMINI_API_KEY di environment lokal."
+                "Gemini API key belum dikonfigurasi. Simpan key melalui Settings atau set PCS_GEMINI_API_KEY di environment lokal."
             )
         return {
             "provider": provider,
