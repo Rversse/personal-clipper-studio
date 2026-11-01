@@ -876,6 +876,10 @@ async def start_export(
         segment["end"] > float(media["duration"]) + 0.05 for segment in clip_segments
     ):
         raise HTTPException(status_code=422, detail="Salah satu klip melewati durasi video sumber.")
+    if payload.burn_subtitles and media["duration"] is not None and any(
+        segment.end > float(media["duration"]) + 0.05 for segment in payload.subtitle_segments
+    ):
+        raise HTTPException(status_code=422, detail="Timestamp subtitle melewati durasi video sumber.")
     source_path = MEDIA_DIR / media["stored_name"]
     if not source_path.is_file():
         raise HTTPException(status_code=404, detail="File video sumber tidak ditemukan.")
