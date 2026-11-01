@@ -200,7 +200,7 @@ def main() -> int:
                 _stop_process_gracefully(process)
                 if process.poll() is None:
                     raise RuntimeError("Packaged backend remained alive after graceful shutdown.")
-                print("Packaged backend health, SQLite create/list, and graceful shutdown tests passed.")
+                print("Packaged backend health, SQLite, Windows Credential Manager round-trip, and graceful shutdown tests passed.")
             finally:
                 if process.poll() is None:
                     _stop_process_gracefully(process, timeout=5)
