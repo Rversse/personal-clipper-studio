@@ -281,7 +281,7 @@ function App() {
         ? segment.words.map((word,wordIndex)=>currentWordTiming(segment.id,wordIndex,word))
         : [];
       const correctedText = subtitleText[index];
-      if (words.length && (!correctedText || correctedText === segment.text)) {
+      if (words.length && (correctedText === undefined || correctedText === segment.text)) {
         return words
           .map(word=>({start:Math.max(word.start,timing.start),end:Math.min(word.end,timing.end),text:word.text}))
           .filter(word=>word.end>word.start && selectedClips.some(clip=>word.end>clip.start&&word.start<clip.end));
