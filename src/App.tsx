@@ -649,7 +649,8 @@ function App() {
       setTranscription(previous => previous?.id === requestTranscriptionId ? result as Transcription : previous);
       setWordTiming(previous=>{const copy={...previous};delete copy[key];return copy;});
     } catch(error) {
-      setWordTiming(previous=>{const copy={...previous};delete copy[key];return copy;});
+      // Keep the edited value so the user can retry after a transient API error.
+      setWordTiming(previous=>({...previous,[key]:next}));
       setError(error instanceof Error ? error.message : "Gagal menyimpan timing kata.");
     } finally {
       wordSaveLockRef.current = false;
