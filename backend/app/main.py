@@ -792,13 +792,14 @@ def cancel_export_job(job_id: str) -> None:
         if row["status"] in ("completed", "failed", "cancelled"):
             raise HTTPException(status_code=409, detail="Export sudah selesai dan tidak dapat dibatalkan.")
         if row["status"] == "queued":
-            connection.execute(
+            changed = connection.execute(
                 """UPDATE export_jobs SET status='cancelled',
                    error='Export dibatalkan sebelum rendering dimulai.', updated_at=?
                    WHERE id=? AND status='queued'""",
                 (now_iso(), job_id),
-            )
-            return
+            ).rowcount
+            if changed:
+                return
     control = rendering.get_control(job_id)
     if control is None:
         with get_connection() as connection:
@@ -810,10 +811,19 @@ def cancel_export_job(job_id: str) -> None:
             )
         return
     control.cancel()
-    # The active worker persists the terminal state after its renderer cleanup.
+    # The active worker persists the terminal state after renderer cleanup.
     deadline = time.monotonic() + 30
     while rendering.get_control(job_id) is not None and time.monotonic() < deadline:
         time.sleep(0.05)
+    with get_connection() as connection:
+        current = connection.execute("SELECT status FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+        if current and current["status"] == "processing":
+            connection.execute(
+                """UPDATE export_jobs SET status='cancelled',
+                   error='Export dibatalkan oleh pengguna.', updated_at=?
+                   WHERE id=? AND status='processing'""",
+                (now_iso(), job_id),
+            )
 
 
 
