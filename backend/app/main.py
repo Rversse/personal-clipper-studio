@@ -31,6 +31,66 @@ _EXPORT_WORKER_WAKE = threading.Event()
 _EXPORT_WORKER_THREAD: threading.Thread | None = None
 _EXPORT_WORKER_STOP = threading.Event()
 
+def _is_completed_export(path: Path) -> bool:
+    """A final output is committed atomically by the renderer; verify its MP4 signature."""
+    try:
+        if not path.is_file() or path.stat().st_size < 1024:
+            return False
+        with path.open("rb") as output:
+            return b"ftyp" in output.read(32)
+    except OSError:
+        return False
+
+
+def _cleanup_interrupted_export_artifacts(destination: Path) -> None:
+    """Remove only temporary files owned by this export's deterministic filename."""
+    partial = destination.with_name(destination.stem + ".partial" + destination.suffix)
+    partial.unlink(missing_ok=True)
+    for artifact in destination.parent.glob(f".{destination.stem}-*"):
+        if artifact.is_file():
+            artifact.unlink(missing_ok=True)
+
+
+def recover_interrupted_exports() -> None:
+    """Resume interrupted renders, preserving outputs atomically committed before a crash."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT id, output_name FROM export_jobs WHERE status='processing'"
+        ).fetchall()
+
+    for row in rows:
+        output_name = str(row["output_name"])
+        if Path(output_name).name != output_name:
+            with get_connection() as connection:
+                connection.execute(
+                    """UPDATE export_jobs SET status='failed',
+                       error='Nama file output tidak valid; export tidak dapat dipulihkan.',
+                       updated_at=? WHERE id=? AND status='processing'""",
+                    (now_iso(), row["id"]),
+                )
+            continue
+
+        destination = EXPORT_DIR / output_name
+        if _is_completed_export(destination):
+            # render_sequence uses os.replace only after FFmpeg produced a complete MP4.
+            with get_connection() as connection:
+                connection.execute(
+                    """UPDATE export_jobs SET status='completed', progress=1,
+                       error=NULL, updated_at=? WHERE id=? AND status='processing'""",
+                    (now_iso(), row["id"]),
+                )
+            continue
+
+        _cleanup_interrupted_export_artifacts(destination)
+        destination.unlink(missing_ok=True)
+        with get_connection() as connection:
+            connection.execute(
+                """UPDATE export_jobs SET status='queued', progress=0, encoder=NULL,
+                   error=NULL, updated_at=? WHERE id=? AND status='processing'""",
+                (now_iso(), row["id"]),
+            )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_storage()
@@ -43,12 +103,7 @@ async def lifespan(_: FastAPI):
                     updated_at=? WHERE status IN ('queued','processing')""",
                 (timestamp,),
             )
-        connection.execute(
-            """UPDATE export_jobs SET status='failed',
-               error='Rendering terputus karena aplikasi sebelumnya ditutup.',
-               updated_at=? WHERE status='processing'""",
-            (timestamp,),
-        )
+    recover_interrupted_exports()
     _EXPORT_WORKER_STOP.clear()
     start_export_worker()
     yield
