@@ -287,7 +287,7 @@ def test_render_sequence_renders_in_order_and_cleans_intermediates(tmp_path, mon
     calls = []
 
     def fake_render(source_path, output_path, start, end, ratio, progress=None, **kwargs):
-        calls.append((start, end, output_path))
+        calls.append((start, end, kwargs.copy()))
         assert kwargs["subtitle_style"] == {"font_size": 68, "vertical_position": 10, "outline_width": 3.5, "background_opacity": 35}
         output_path.write_bytes(b"x" * 2048)
         if progress:
