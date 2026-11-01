@@ -220,6 +220,7 @@ def build_render_command(
     crop_zoom: float = 1.0,
     crop_x: float = 0.5,
     crop_y: float = 0.5,
+    audio_volume: float = 1.0,
     subtitle_style: dict | None = None,
 ) -> list[str]:
     if aspect_ratio not in OUTPUT_SIZES:
@@ -231,6 +232,8 @@ def build_render_command(
     width, height = OUTPUT_SIZES[aspect_ratio]
     if not all(math.isfinite(value) for value in (crop_zoom, crop_x, crop_y)) or not 1.0 <= crop_zoom <= 3.0 or not 0.0 <= crop_x <= 1.0 or not 0.0 <= crop_y <= 1.0:
         raise RenderError("Pengaturan crop/zoom berada di luar batas.")
+    if not math.isfinite(audio_volume) or not 0.0 <= audio_volume <= 2.0:
+        raise RenderError("Volume audio harus berada pada rentang 0 sampai 2.")
     video_filter = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop=w={width}/({crop_zoom:.4f}):h={height}/({crop_zoom:.4f}):"
@@ -249,6 +252,8 @@ def build_render_command(
         "-map", "0:v:0", "-map", "0:a:0?",
         "-vf", video_filter, "-pix_fmt", "yuv420p",
     ]
+    if audio_volume != 1.0:
+        command += ["-af", f"volume={audio_volume:.4f}"]
     if encoder == "h264_nvenc":
         command += ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "23", "-b:v", "0"]
     elif encoder == "libx264":
@@ -367,6 +372,7 @@ def render_clip(
     crop_zoom: float = 1.0,
     crop_x: float = 0.5,
     crop_y: float = 0.5,
+    audio_volume: float = 1.0,
     subtitle_style: dict | None = None,
     control: RenderControl | None = None,
 ) -> dict[str, str]:
@@ -397,7 +403,7 @@ def render_clip(
             subtitle_file.write_text(build_ass_content(subtitle_segments, start_seconds, end_seconds, subtitle_preset, aspect_ratio), encoding="utf-8-sig")
         command = build_render_command(
             source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-            subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, subtitle_style
+            subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, audio_volume, subtitle_style
         )
         try:
             _execute(command, duration, progress, control)
@@ -408,7 +414,7 @@ def render_clip(
             encoder = "libx264"
             cpu_command = build_render_command(
                 source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-                subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, subtitle_style
+                subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, audio_volume, subtitle_style
             )
             _execute(cpu_command, duration, progress, control)
         if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
@@ -437,6 +443,7 @@ def render_sequence(
     crop_zoom: float = 1.0,
     crop_x: float = 0.5,
     crop_y: float = 0.5,
+    audio_volume: float = 1.0,
     subtitle_style: dict | None = None,
     control: RenderControl | None = None,
 ) -> dict[str, str]:
@@ -455,6 +462,7 @@ def render_sequence(
             segment_zoom = float(segment.get("crop_zoom", crop_zoom))
             segment_x = float(segment.get("crop_x", crop_x))
             segment_y = float(segment.get("crop_y", crop_y))
+            segment_audio_volume = float(segment.get("audio_volume", audio_volume))
         except (KeyError, TypeError, ValueError) as error:
             raise RenderError("Data klip sequence tidak valid.") from error
         if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
@@ -463,9 +471,12 @@ def render_sequence(
                 or not 1.0 <= segment_zoom <= 3.0
                 or not 0.0 <= segment_x <= 1.0 or not 0.0 <= segment_y <= 1.0):
             raise RenderError("Pengaturan crop salah satu klip tidak valid.")
+        if not math.isfinite(segment_audio_volume) or not 0.0 <= segment_audio_volume <= 2.0:
+            raise RenderError("Pengaturan volume salah satu klip tidak valid.")
         normalized.append({
             "start": start, "end": end,
             "crop_zoom": segment_zoom, "crop_x": segment_x, "crop_y": segment_y,
+            "audio_volume": segment_audio_volume,
         })
 
     ffmpeg = shutil.which("ffmpeg")
@@ -498,7 +509,7 @@ def render_sequence(
                 progress=segment_progress, subtitle_segments=subtitle_segments,
                 subtitle_preset=subtitle_preset,
                 crop_zoom=segment['crop_zoom'], crop_x=segment['crop_x'], crop_y=segment['crop_y'],
-                subtitle_style=subtitle_style, control=control,
+                audio_volume=segment['audio_volume'], subtitle_style=subtitle_style, control=control,
             )
             encoders.append(result["encoder"])
             completed_duration += end - start
