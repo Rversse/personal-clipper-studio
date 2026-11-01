@@ -195,6 +195,12 @@ def runtime_diagnostics() -> dict[str, Any]:
 
 
 @router.get("/api/diagnostics")
-async def get_runtime_diagnostics() -> dict[str, Any]:
+async def get_runtime_diagnostics(whisper_model: str = "small") -> dict[str, Any]:
     """Report local runtime readiness without exposing secrets or contacting remote providers."""
-    return runtime_diagnostics()
+    if whisper_model not in transcription.WHISPER_MODELS:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=422, detail="Model Whisper tidak dikenal.")
+    result = runtime_diagnostics()
+    result["transcription"]["model_preflight"] = transcription.whisper_model_preflight(whisper_model)
+    return result
