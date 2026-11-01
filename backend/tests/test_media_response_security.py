@@ -66,7 +66,7 @@ def test_uploaded_media_uses_server_controlled_mime_type(client, extension, expe
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
-def test_export_download_sets_nosniff_header(client, monkeypatch, tmp_path):
+def test_export_download_sets_nosniff_header(client):
     # A completed export is served with a fixed video MIME type and download name.
     project = client.post(
         "/api/projects",
