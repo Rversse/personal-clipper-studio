@@ -22,7 +22,7 @@ from .clip_boundaries import refine_candidate_boundaries
 from .schemas import (
     DiscoveryCreate, DiscoveryResponse, MediaResponse, ProjectCreate, ProjectResponse,
     TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, TranscriptWordUpdate,
-    ExportCreate, ExportResponse,
+    ExportCreate, ExportResponse, ExportSubtitleSegment,
 )
 from . import ai_discovery, transcription, rendering, audio_analysis
 
@@ -1060,15 +1060,19 @@ async def start_export(
                         })
                 for segment in segments_by_id.values():
                     if segment["words"] and word_timing_matches_segment_text(segment["text"], segment["words"]):
-                        payload.subtitle_segments.extend(segment["words"])
+                        payload.subtitle_segments.extend(
+                            ExportSubtitleSegment(**word) for word in segment["words"]
+                        )
                     else:
                         # Missing or malformed word timestamps must not silently
                         # remove text from the rendered subtitle.
-                        payload.subtitle_segments.append({
-                            "start": segment["start"],
-                            "end": segment["end"],
-                            "text": segment["text"],
-                        })
+                        payload.subtitle_segments.append(
+                            ExportSubtitleSegment(
+                                start=segment["start"],
+                                end=segment["end"],
+                                text=segment["text"],
+                            )
+                        )
     try:
         rendering.available_encoder()
         if payload.burn_subtitles and not rendering.subtitles_filter_available():
