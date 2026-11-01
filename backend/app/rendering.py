@@ -91,6 +91,15 @@ def unregister_control(job_id: str) -> None:
         _CONTROLS.pop(job_id, None)
 
 
+def cancel_all_controls() -> int:
+    """Request cancellation of every render owned by the current API process."""
+    with _CONTROLS_LOCK:
+        controls = list(_CONTROLS.values())
+    for control in controls:
+        control.cancel()
+    return len(controls)
+
+
 SUBTITLE_STYLES = {
     "clean": {"font": "Arial", "size": 52, "primary": "&H00FFFFFF", "outline": "&HCC000000", "bold": 0, "border": 2, "shadow": 1, "margin": 100},
     "bold": {"font": "Arial", "size": 62, "primary": "&H00FFFFFF", "outline": "&H00000000", "bold": 1, "border": 4, "shadow": 2, "margin": 110},
