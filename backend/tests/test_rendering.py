@@ -104,6 +104,55 @@ def test_recovery_keeps_atomically_committed_mp4_and_marks_job_completed(tmp_pat
     assert destination.stat().st_size > 1024
 
 
+def test_real_ffmpeg_sequence_render_produces_vertical_h264_aac_mp4(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        import pytest
+        pytest.skip("FFmpeg and FFprobe are required for the real-media integration test.")
+
+    source = tmp_path / "synthetic-source.mp4"
+    output = tmp_path / "synthetic-short.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=30:d=2",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+            "-shortest", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac",
+            str(source),
+        ],
+        check=True, capture_output=True, timeout=60,
+    )
+    monkeypatch.setattr(rendering, "available_encoder", lambda *_args: "libx264")
+    result = rendering.render_sequence(
+        source, output,
+        [{"start": 0.25, "end": 1.75, "crop_zoom": 1, "crop_x": 0.5, "crop_y": 0.5, "audio_volume": 1}],
+        "9:16", quality_profile="balanced", frame_rate=30,
+    )
+    assert result["encoder"] == "libx264"
+    assert output.is_file() and output.stat().st_size > 1024
+
+    probe = subprocess.run(
+        [
+            ffprobe, "-v", "error", "-show_entries",
+            "stream=codec_name,codec_type,width,height:format=duration",
+            "-of", "json", str(output),
+        ],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    metadata = json.loads(probe.stdout)
+    streams = metadata["streams"]
+    video = next(stream for stream in streams if stream["codec_type"] == "video")
+    audio = next(stream for stream in streams if stream["codec_type"] == "audio")
+    assert (video["width"], video["height"]) == (1080, 1920)
+    assert video["codec_name"] == "h264"
+    assert audio["codec_name"] == "aac"
+    assert 1.35 <= float(metadata["format"]["duration"]) <= 1.65
+
+
 def test_render_command_has_trim_crop_and_safe_audio_mapping(tmp_path):
     command = rendering.build_render_command(
         tmp_path / "source.mp4", tmp_path / "output.mp4", 5, 35, "9:16", "libx264"
