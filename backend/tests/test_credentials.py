@@ -52,7 +52,7 @@ def test_environment_key_has_priority_and_is_not_overwritten(monkeypatch):
     assert backend.values == {}
 
 
-@pytest.mark.parametrize("value", ["", "   ", "bad\nkey", "bad\x00key", "x" * 513])
+@pytest.mark.parametrize("value", ["", "   ", "bad\nkey", "bad key", "bad\x00key", "x" * 513])
 def test_api_key_validation_rejects_invalid_values(value):
     with pytest.raises(ValueError):
         credentials.validate_api_key(value)
