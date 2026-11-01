@@ -159,6 +159,23 @@ def test_gemini_provider_settings_reads_key_from_secure_store(monkeypatch):
     }
 
 
+def test_gemini_provider_settings_handles_credential_store_failure(monkeypatch):
+    from app import credentials
+
+    monkeypatch.setenv("PCS_AI_PROVIDER", "gemini")
+    monkeypatch.delenv("PCS_GEMINI_API_KEY", raising=False)
+
+    def fail_read():
+        raise credentials.CredentialStoreError("internal vault detail")
+
+    monkeypatch.setattr(credentials, "get_gemini_api_key", fail_read)
+    with pytest.raises(ai_discovery.DiscoveryProviderError) as error:
+        ai_discovery.provider_settings()
+
+    assert "internal vault detail" not in str(error.value)
+    assert "penyimpanan kredensial Windows" in str(error.value)
+
+
 def test_discovery_fails_fast_without_gemini_key(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setenv("PCS_AI_PROVIDER", "gemini")
