@@ -93,6 +93,10 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
         assert candidate["start_seconds"] == 0
         assert candidate["end_seconds"] == 60
         assert candidate["score"] == 88
+        assert candidate["boundary_quality"] >= 50
+        assert candidate["opening_boundary"]
+        assert candidate["ending_boundary"]
+        assert candidate["context_note"]
         latest_discovery = client.get(f"/api/media/{media_id}/discovery/latest")
         assert latest_discovery.status_code == 200
         assert latest_discovery.json()["id"] == payload["id"]
