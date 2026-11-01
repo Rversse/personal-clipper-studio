@@ -53,6 +53,7 @@ def runtime_diagnostics() -> dict[str, Any]:
     ffprobe = _binary_info("ffprobe")
     whisper_installed = transcription.is_available()
     ollama_selected = provider == "ollama"
+    ollama_installed = shutil.which("ollama") is not None
     dependencies = [
         {
             "id": "ffmpeg",
@@ -80,9 +81,9 @@ def runtime_diagnostics() -> dict[str, Any]:
             "id": "ollama",
             "name": "Ollama (opsional)",
             "required": False,
-            "available": ollama_selected and configured,
-            "status": "selected_configured" if ollama_selected and configured else "optional",
-            "description": "Diperlukan hanya jika memilih provider AI lokal Ollama. Gemini tidak membutuhkan Ollama.",
+            "available": ollama_installed,
+            "status": "installed" if ollama_installed else "missing_optional",
+            "description": "Opsional untuk provider AI lokal. Pemeriksaan hanya mendeteksi program Ollama CLI; status server dan model belum diuji. Gemini tidak membutuhkan Ollama.",
             "download_url": "https://ollama.com/download/windows",
             "download_label": "Download Ollama untuk Windows",
             "install_note": "Setelah instalasi, jalankan Ollama dan unduh model yang dipilih. Koneksi server dan ketersediaan model belum diuji oleh pemeriksaan ini.",
