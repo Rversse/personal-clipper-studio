@@ -14,6 +14,13 @@ use std::{
 #[cfg(target_os = "windows")]
 use tauri::{path::BaseDirectory, Manager};
 
+struct AppSessionToken(String);
+
+#[tauri::command]
+fn get_local_api_token(state: tauri::State<'_, AppSessionToken>) -> String {
+    state.inner().0.clone()
+}
+
 #[cfg(target_os = "windows")]
 struct BackendProcess(Mutex<Option<Child>>);
 
@@ -54,6 +61,9 @@ fn shutdown_backend(child: &mut Child) {
 fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
+            // A fresh, unpredictable token binds this WebView to its child API process.
+            let session_token = uuid::Uuid::new_v4().to_string();
+            app.manage(AppSessionToken(session_token.clone()));
             // Debug builds use the separately started development API.
             // Release Windows bundles start their packaged, loopback-only service here.
             #[cfg(target_os = "windows")]
@@ -90,6 +100,7 @@ fn main() {
                 command
                     .arg("--port")
                     .arg("8765")
+                    .env("PCS_API_SESSION_TOKEN", &session_token)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::from(stdout))
                     .stderr(Stdio::from(stderr));
@@ -104,6 +115,7 @@ fn main() {
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![get_local_api_token])
         .build(tauri::generate_context!())
         .expect("failed to build Personal Clipper Studio");
 
