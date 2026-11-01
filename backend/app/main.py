@@ -836,9 +836,18 @@ async def start_export(
     if payload.end_seconds <= payload.start_seconds:
         raise HTTPException(status_code=422, detail="Titik akhir harus lebih besar dari titik awal.")
     clip_segments = [
-        {"start": segment.start, "end": segment.end}
+        {
+            "start": segment.start,
+            "end": segment.end,
+            "crop_zoom": payload.crop_zoom if segment.crop_zoom is None else segment.crop_zoom,
+            "crop_x": payload.crop_x if segment.crop_x is None else segment.crop_x,
+            "crop_y": payload.crop_y if segment.crop_y is None else segment.crop_y,
+        }
         for segment in payload.clip_segments
-    ] or [{"start": payload.start_seconds, "end": payload.end_seconds}]
+    ] or [{
+        "start": payload.start_seconds, "end": payload.end_seconds,
+        "crop_zoom": payload.crop_zoom, "crop_x": payload.crop_x, "crop_y": payload.crop_y,
+    }]
     for segment in clip_segments:
         if segment["end"] <= segment["start"]:
             raise HTTPException(status_code=422, detail="Titik akhir setiap klip harus lebih besar dari titik awal.")
