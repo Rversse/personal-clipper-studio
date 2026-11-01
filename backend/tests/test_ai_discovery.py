@@ -138,6 +138,27 @@ def test_transcript_chunking_keeps_overlap_and_progresses():
     assert chunks[-1][-1]["end"] == segments[-1]["end"]
 
 
+def test_gemini_provider_settings_reads_key_from_secure_store(monkeypatch):
+    from app import credentials
+
+    monkeypatch.setenv("PCS_AI_PROVIDER", "gemini")
+    monkeypatch.delenv("PCS_GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("PCS_GEMINI_MODEL", "gemini-test-model")
+    monkeypatch.setattr(credentials, "_windows_backend", lambda: type(
+        "Backend",
+        (),
+        {"get_password": lambda self, service, account: "vault-secret"},
+    )())
+
+    settings = ai_discovery.provider_settings()
+
+    assert settings == {
+        "provider": "gemini",
+        "api_key": "vault-secret",
+        "model": "gemini-test-model",
+    }
+
+
 def test_discovery_fails_fast_without_gemini_key(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setenv("PCS_AI_PROVIDER", "gemini")
