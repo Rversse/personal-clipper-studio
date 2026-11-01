@@ -13,6 +13,20 @@ from . import credentials
 
 router = APIRouter()
 
+_ALLOWED_UI_ORIGINS = {
+    "http://127.0.0.1:1420",
+    "http://localhost:1420",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+}
+
+
+def _require_trusted_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin and origin not in _ALLOWED_UI_ORIGINS:
+        raise HTTPException(status_code=403, detail="Origin tidak diizinkan untuk pengaturan AI.")
+
 
 def _model_name() -> str:
     return os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
@@ -79,6 +93,7 @@ def get_ai_settings() -> dict[str, Any]:
 
 @router.put("/api/settings/ai/gemini-key")
 async def put_gemini_key(request: Request) -> dict[str, Any]:
+    _require_trusted_origin(request)
     body_chunks: list[bytes] = []
     body_size = 0
     async for chunk in request.stream():
@@ -104,7 +119,8 @@ async def put_gemini_key(request: Request) -> dict[str, Any]:
 
 
 @router.delete("/api/settings/ai/gemini-key")
-def remove_gemini_key() -> dict[str, Any]:
+def remove_gemini_key(request: Request) -> dict[str, Any]:
+    _require_trusted_origin(request)
     try:
         credentials.delete_gemini_api_key()
     except credentials.CredentialStoreUnavailable as error:
@@ -115,7 +131,8 @@ def remove_gemini_key() -> dict[str, Any]:
 
 
 @router.post("/api/settings/ai/gemini-test")
-def test_gemini_key() -> dict[str, Any]:
+def test_gemini_key(request: Request) -> dict[str, Any]:
+    _require_trusted_origin(request)
     try:
         key = credentials.get_gemini_api_key()
     except credentials.CredentialStoreError as error:
