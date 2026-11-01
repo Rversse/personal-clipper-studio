@@ -25,7 +25,10 @@ def _windows_backend() -> Any:
     try:
         from keyring.backends.Windows import WinVaultKeyring
 
-        return WinVaultKeyring()
+        backend = WinVaultKeyring()
+        if backend.priority <= 0:
+            raise RuntimeError("Windows Credential Manager backend is not available.")
+        return backend
     except Exception as error:
         raise CredentialStoreUnavailable(
             "Windows Credential Manager tidak tersedia pada perangkat ini."
