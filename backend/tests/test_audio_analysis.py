@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from types import SimpleNamespace
+
+import pytest
 
 from app import audio_analysis
 
@@ -64,3 +68,45 @@ def test_analyze_audio_handles_missing_ffmpeg(tmp_path, monkeypatch):
     monkeypatch.setattr(audio_analysis, "executable", lambda name: None)
 
     assert audio_analysis.analyze_audio(source) is None
+
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg is not installed")
+def test_analyze_audio_smoke_with_real_ffmpeg(tmp_path):
+    source = tmp_path / "speech-then-silence.wav"
+    generate = subprocess.run(
+        [
+            shutil.which("ffmpeg"),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=16000:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=16000:cl=mono:d=1",
+            "-filter_complex",
+            "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+            "-map",
+            "[out]",
+            "-c:a",
+            "pcm_s16le",
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert generate.returncode == 0, generate.stderr
+
+    result = audio_analysis.analyze_audio(source, duration=2.0, timeout=30)
+
+    assert result is not None
+    assert result["energy_samples"]
+    assert result["silences"]
+    assert any(abs(item["start"] - 1.0) <= 0.15 for item in result["silences"])
