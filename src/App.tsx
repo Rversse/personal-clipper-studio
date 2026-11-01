@@ -1060,7 +1060,7 @@ function App() {
                               if(timing.end<=clip.start || timing.start>=clip.end) return [];
                               const start=Math.max(timing.start,clip.start);
                               const end=Math.min(timing.end,clip.end);
-                              const key=wordKey(segment.id,wordIndex);
+
                               const dragProps={
                                 onPointerMove:moveWordTiming,
                                 onPointerUp:finishWordTiming,
