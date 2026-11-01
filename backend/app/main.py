@@ -283,14 +283,24 @@ def transcription_payload(job_id: str) -> dict:
             "SELECT id,start,end,text FROM transcript_segments WHERE job_id=? ORDER BY start",
             (job_id,),
         ).fetchall()
-        segment_payloads = []
-        for segment in segments:
-            words = connection.execute(
-                """SELECT start,end,text,probability FROM transcript_words
-                   WHERE segment_id=? ORDER BY word_index""",
-                (segment["id"],),
-            ).fetchall()
-            segment_payloads.append({**dict(segment), "words": [dict(word) for word in words]})
+        word_rows = connection.execute(
+            """SELECT segment_id,start,end,text,probability FROM transcript_words
+               WHERE job_id=? ORDER BY segment_id,word_index""",
+            (job_id,),
+        ).fetchall()
+
+    words_by_segment: dict[int, list[dict]] = {}
+    for word in word_rows:
+        words_by_segment.setdefault(int(word["segment_id"]), []).append({
+            "start": word["start"],
+            "end": word["end"],
+            "text": word["text"],
+            "probability": word["probability"],
+        })
+    segment_payloads = [
+        {**dict(segment), "words": words_by_segment.get(int(segment["id"]), [])}
+        for segment in segments
+    ]
     return {
         **dict(job),
         "segments": segment_payloads,
@@ -413,6 +423,8 @@ async def update_transcript_word(
 
     if not math.isfinite(payload.start) or not math.isfinite(payload.end) or payload.end <= payload.start:
         raise HTTPException(status_code=422, detail="Rentang waktu kata tidak valid.")
+    if not payload.text.strip():
+        raise HTTPException(status_code=422, detail="Teks kata tidak boleh kosong.")
     with get_connection() as connection:
         segment = connection.execute(
             "SELECT start,end FROM transcript_segments WHERE id=? AND job_id=?",

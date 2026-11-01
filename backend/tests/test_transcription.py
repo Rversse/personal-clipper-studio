@@ -179,6 +179,11 @@ def test_update_word_timing_validates_and_persists(tmp_path, monkeypatch):
             json={"start": 0.8, "end": 1.1, "text": "satu"},
         )
         assert invalid.status_code == 422
+        blank_text = client.patch(
+            f"/api/transcriptions/{job_id}/segments/{segment_id}/words/0",
+            json={"start": 0.12, "end": 0.55, "text": "   "},
+        )
+        assert blank_text.status_code == 422
 
 
 
