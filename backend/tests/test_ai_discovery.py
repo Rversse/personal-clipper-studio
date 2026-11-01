@@ -275,3 +275,144 @@ def test_boundary_refinement_uses_full_transcript_context_at_chunk_edges():
     assert candidate is not None
     assert candidate["start_seconds"] == 10
     assert "awal transkrip" not in candidate["opening_boundary"]
+
+
+
+def test_word_level_boundary_refinement_snaps_to_complete_words_and_pauses():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [{
+        "start": 0.0,
+        "end": 5.0,
+        "text": "Kita perlu memahami masalah. Solusinya ternyata sangat sederhana.",
+        "words": [
+            {"start": 0.0, "end": 0.3, "text": "Kita", "probability": 0.99},
+            {"start": 0.3, "end": 0.7, "text": "perlu", "probability": 0.98},
+            {"start": 0.7, "end": 1.2, "text": "memahami", "probability": 0.97},
+            {"start": 1.2, "end": 2.1, "text": "masalah.", "probability": 0.99},
+            {"start": 2.6, "end": 3.1, "text": "Solusinya", "probability": 0.98},
+            {"start": 3.1, "end": 3.5, "text": "ternyata", "probability": 0.97},
+            {"start": 3.5, "end": 3.9, "text": "sangat", "probability": 0.98},
+            {"start": 3.9, "end": 4.8, "text": "sederhana.", "probability": 0.99},
+        ],
+    }]
+
+    refined = refine_candidate_boundaries(2.7, 4.1, transcript, 2, 3)
+
+    assert refined is not None
+    assert refined["start_seconds"] == 2.6
+    assert refined["end_seconds"] == 4.8
+    assert "Presisi kata" in refined["opening_boundary"]
+    assert "Presisi kata" in refined["ending_boundary"]
+    assert "jeda alami" in refined["opening_boundary"]
+    assert "akhir kalimat" in refined["ending_boundary"]
+
+
+def test_invalid_word_timestamps_fall_back_to_segment_boundaries():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [
+        {
+            "start": 0.0, "end": 10.0, "text": "Pembuka lengkap.",
+            "words": [
+                {"start": -1.0, "end": 0.2, "text": "invalid"},
+                {"start": 8.0, "end": 7.0, "text": "reversed"},
+            ],
+        },
+        {
+            "start": 10.0, "end": 20.0, "text": "Jawaban akhirnya selesai.",
+            "words": [{"start": 19.0, "end": 25.0, "text": "invalid"}],
+        },
+    ]
+
+    refined = refine_candidate_boundaries(1.0, 19.0, transcript, 15, 25)
+
+    assert refined is not None
+    assert refined["start_seconds"] == 0.0
+    assert refined["end_seconds"] == 20.0
+    assert "Presisi kata" not in refined["opening_boundary"]
+
+
+def test_word_level_boundary_refinement_preserves_duration_constraints():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [{
+        "start": 0.0,
+        "end": 20.0,
+        "text": "Kalimat pembuka. Kalimat penutup.",
+        "words": [
+            {"start": 0.0, "end": 1.0, "text": "Kalimat"},
+            {"start": 1.0, "end": 2.0, "text": "pembuka."},
+            {"start": 18.0, "end": 19.0, "text": "Kalimat"},
+            {"start": 19.0, "end": 20.0, "text": "penutup."},
+        ],
+    }]
+
+    refined = refine_candidate_boundaries(1.0, 19.0, transcript, 5, 10)
+
+    assert refined is None
+
+
+def test_discovery_job_loads_persisted_words_for_candidate_refinement(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ai_discovery,
+        "provider_settings",
+        lambda: {"provider": "gemini", "model": "test-model"},
+    )
+
+    def fake_analyze(segments, **kwargs):
+        assert any(segment.get("words") for segment in segments)
+        return [{
+            "start_seconds": 11,
+            "end_seconds": 56,
+            "title": "Jawaban utuh",
+            "hook": "Jawabannya ternyata sederhana",
+            "summary": "Konteks dan jawaban lengkap.",
+            "rationale": "Pembuka serta penutup tidak memotong kata.",
+            "score": 90,
+            "category": "education",
+        }]
+
+    monkeypatch.setattr(ai_discovery, "analyze_transcript_chunk", fake_analyze)
+
+    with TestClient(app) as client:
+        media_id, transcript_id = seed_completed_transcript()
+        with database.get_connection() as connection:
+            segments = connection.execute(
+                "SELECT id,start,end FROM transcript_segments WHERE job_id=? ORDER BY start",
+                (transcript_id,),
+            ).fetchall()
+            connection.executemany(
+                """INSERT INTO transcript_words(
+                    job_id,segment_id,word_index,start,end,text,probability
+                ) VALUES(?,?,?,?,?,?,?)""",
+                [
+                    (
+                        transcript_id, row["id"], 0,
+                        float(row["start"]) + 0.1,
+                        float(row["end"]) - 0.1,
+                        f"kata-{int(row['start'])}.",
+                        0.95,
+                    )
+                    for row in segments
+                ],
+            )
+
+        created = client.post(
+            f"/api/media/{media_id}/discovery",
+            json={
+                "transcription_id": transcript_id,
+                "mode": "auto",
+                "min_duration": 30,
+                "max_duration": 60,
+            },
+        )
+        assert created.status_code == 202
+        result = client.get(f"/api/discovery/{created.json()['id']}")
+        assert result.status_code == 200
+        candidate = result.json()["candidates"][0]
+        assert candidate["start_seconds"] == 10.1
+        assert candidate["end_seconds"] == 59.9
+        assert "Presisi kata" in candidate["opening_boundary"]
+        assert "Presisi kata" in candidate["ending_boundary"]

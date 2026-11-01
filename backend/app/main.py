@@ -537,12 +537,28 @@ def run_discovery_job(job_id: str) -> None:
             if job is None:
                 return
             segments = connection.execute(
-                """SELECT start,end,text FROM transcript_segments
+                """SELECT id,start,end,text FROM transcript_segments
                    WHERE job_id=?
                    ORDER BY start""",
                 (job["transcription_id"],),
             ).fetchall()
-        transcript = [dict(item) for item in segments]
+            word_rows = connection.execute(
+                """SELECT segment_id,start,end,text,probability FROM transcript_words
+                   WHERE job_id=? ORDER BY segment_id,word_index""",
+                (job["transcription_id"],),
+            ).fetchall()
+        words_by_segment: dict[int, list[dict]] = {}
+        for word in word_rows:
+            words_by_segment.setdefault(int(word["segment_id"]), []).append({
+                "start": word["start"],
+                "end": word["end"],
+                "text": word["text"],
+                "probability": word["probability"],
+            })
+        transcript = [
+            {**dict(item), "words": words_by_segment.get(int(item["id"]), [])}
+            for item in segments
+        ]
         if not transcript:
             raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
         chunks = ai_discovery.split_transcript(transcript)

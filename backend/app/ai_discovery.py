@@ -180,7 +180,7 @@ Rules:
 - Prefer ending after a complete sentence, answer, reveal, punchline, or conclusion. Include the reaction or payoff when it is part of the same moment.
 - Avoid boundaries immediately after conjunctions or unfinished words such as "dan", "karena", "yang", "tapi", or "sehingga".
 - Preserve context: include necessary setup, punchline, answer, or conclusion. Do not cut mid-sentence.
-- Use supplied segment boundaries as the primary timing references. The server will perform a second deterministic boundary pass using sentence punctuation and natural pauses.
+- Use supplied segment boundaries as semantic references. The server will perform a deterministic second pass using valid Whisper word timestamps when available, while checking sentence punctuation, conjunctions, natural pauses, and the requested duration. If word timings are missing or unusable, the server falls back to segment boundaries.
 - Prefer strong opinions, surprising facts, useful explanations, emotional moments, humor, tension, and complete stories.
 - Avoid dead air, repetitive points, greetings, ads, and fragments without context.
 - Score editorial potential from 0 to 100. Explain the score briefly in rationale.

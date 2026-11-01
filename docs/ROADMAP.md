@@ -42,7 +42,8 @@
 - [x] Persist/display boundary quality score and opening/ending rationale on candidates
 - [x] Word-level transcription timestamps, persistence, API exposure, and per-word Subtitle Studio timing corrections
 - [x] Word-level timeline visualization with direct drag/trim editing, server persistence, and segment-level fallback
-- [ ] Word-level boundary alignment and prosody-aware semantic cut detection
+- [x] Word-level candidate boundary alignment with punctuation, pause, conjunction, and duration constraints; segment fallback when word timestamps are unavailable or invalid
+- [ ] Prosody-aware semantic cut detection using audio energy, speech pauses, and emphasis signals
 
 ## Phase 5 — rendering and delivery (partial)
 - [x] Single-clip and ordered multi-clip FFmpeg H.264 MP4 render pipeline with atomic output replacement
