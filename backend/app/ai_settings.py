@@ -73,7 +73,7 @@ def _test_gemini_key(api_key: str, model: str) -> dict[str, Any]:
 
 
 @router.get("/api/settings/ai")
-async def get_ai_settings() -> dict[str, Any]:
+def get_ai_settings() -> dict[str, Any]:
     return _settings_payload()
 
 
@@ -104,7 +104,7 @@ async def put_gemini_key(request: Request) -> dict[str, Any]:
 
 
 @router.delete("/api/settings/ai/gemini-key")
-async def remove_gemini_key() -> dict[str, Any]:
+def remove_gemini_key() -> dict[str, Any]:
     try:
         credentials.delete_gemini_api_key()
     except credentials.CredentialStoreUnavailable as error:
@@ -115,7 +115,7 @@ async def remove_gemini_key() -> dict[str, Any]:
 
 
 @router.post("/api/settings/ai/gemini-test")
-async def test_gemini_key() -> dict[str, Any]:
+def test_gemini_key() -> dict[str, Any]:
     try:
         key = credentials.get_gemini_api_key()
     except credentials.CredentialStoreError as error:
