@@ -122,3 +122,73 @@ def test_gemini_test_request_uses_header_and_never_puts_key_in_url(monkeypatch):
     assert state["headers"]["x-goog-api-key"] == "header-only-secret"
     assert "header-only-secret" not in state["path"]
     assert state["closed"] is True
+
+
+
+def test_invalid_gemini_key_is_not_reflected_in_validation_response():
+    secret = "too-long-private-key-" + ("x" * 600)
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/settings/ai/gemini-key",
+            json={"api_key": secret},
+        )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+
+
+def test_gemini_model_metadata_error_statuses_are_classified(monkeypatch):
+    class Response:
+        def __init__(self, status):
+            self.status = status
+
+        def read(self, _limit):
+            return b'{"error":{"message":"private provider detail"}}'
+
+    class Connection:
+        status = 401
+
+        def __init__(self, host, timeout, context):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return Response(self.status)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ai_settings.http.client, "HTTPSConnection", Connection)
+    cases = {
+        401: "authentication_failed",
+        403: "authentication_failed",
+        404: "model_not_found",
+        429: "rate_limited",
+        503: "provider_error",
+    }
+    for http_status, expected in cases.items():
+        Connection.status = http_status
+        result = ai_settings._test_gemini_key("private-test-key", "gemini-test")
+        assert result["status"] == expected
+        assert "private provider detail" not in result["message"]
+
+
+def test_gemini_model_metadata_network_error_is_safe(monkeypatch):
+    class Connection:
+        def __init__(self, host, timeout, context):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            raise OSError("sensitive transport detail")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ai_settings.http.client, "HTTPSConnection", Connection)
+    result = ai_settings._test_gemini_key("private-test-key", "gemini-test")
+
+    assert result["success"] is False
+    assert result["status"] == "unreachable"
+    assert "sensitive transport detail" not in result["message"]
