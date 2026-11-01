@@ -39,6 +39,26 @@ def seed_media():
     return media_id
 
 
+
+def test_queued_transcription_can_be_cancelled(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        job_id = str(uuid.uuid4())
+        timestamp = main_module.now_iso()
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,?,'queued','tiny',?,?)""",
+                (job_id, media_id, timestamp, timestamp),
+            )
+        response = client.post(f"/api/transcriptions/{job_id}/cancel")
+        assert response.status_code == 200
+        assert response.json()["status"] == "cancelled"
+        assert "dibatalkan" in response.json()["error"]
+
+
 def test_transcription_requires_optional_whisper(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(transcription, "is_available", lambda: False)
@@ -53,7 +73,7 @@ def test_transcription_job_persists_segments(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(transcription, "is_available", lambda: True)
 
-    def fake_transcribe(path, model_name, language, progress):
+    def fake_transcribe(path, model_name, language, progress, cancel_check=None):
         assert path.is_file()
         assert model_name == "tiny"
         assert language == "id"
@@ -91,7 +111,7 @@ def test_word_timestamps_are_persisted_and_returned(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(transcription, "is_available", lambda: True)
 
-    def fake_transcribe(path, model_name, language, progress):
+    def fake_transcribe(path, model_name, language, progress, cancel_check=None):
         return {
             "language": "id", "language_probability": 0.99, "duration": 4.0,
             "segments": [{
@@ -146,7 +166,7 @@ def test_update_word_timing_validates_and_persists(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(transcription, "is_available", lambda: True)
 
-    def fake_transcribe(path, model_name, language, progress):
+    def fake_transcribe(path, model_name, language, progress, cancel_check=None):
         return {
             "language": "id", "language_probability": 0.9, "duration": 3.0,
             "segments": [{
