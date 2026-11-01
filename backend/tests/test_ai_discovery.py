@@ -464,3 +464,34 @@ def test_audio_pause_prosody_adjusts_segment_boundaries():
     assert refined["end_seconds"] == 20.0
     assert "jeda audio alami" in refined["opening_boundary"]
     assert "jeda audio alami" in refined["ending_boundary"]
+
+
+
+def test_rms_energy_changes_adjust_opening_and_ending_signals():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [
+        {"start": 0.0, "end": 10.0, "text": "Konteks sebelumnya sudah selesai."},
+        {"start": 10.0, "end": 20.0, "text": "Jawaban akhirnya sudah lengkap."},
+    ]
+    audio_features = {
+        "energy_samples": [
+            {"time": 8.8, "rms_db": -34.0},
+            {"time": 9.2, "rms_db": -32.0},
+            {"time": 10.3, "rms_db": -16.0},
+            {"time": 10.8, "rms_db": -15.0},
+            {"time": 18.6, "rms_db": -15.0},
+            {"time": 19.2, "rms_db": -16.0},
+            {"time": 20.3, "rms_db": -34.0},
+            {"time": 20.8, "rms_db": -32.0},
+        ],
+        "silences": [],
+    }
+
+    refined = refine_candidate_boundaries(
+        10.1, 19.0, transcript, 5, 15, audio_features=audio_features
+    )
+
+    assert refined is not None
+    assert "energi bicara menguat" in refined["opening_boundary"]
+    assert "energi bicara mereda" in refined["ending_boundary"]

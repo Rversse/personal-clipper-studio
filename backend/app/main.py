@@ -565,6 +565,15 @@ def run_discovery_job(job_id: str) -> None:
             {**dict(item), "words": words_by_segment.get(int(item["id"]), [])}
             for item in segments
         ]
+        if not transcript:
+            raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
+
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=?",
+                (now_iso(), job_id),
+            )
+
         audio_features = None
         if media is not None:
             try:
@@ -580,12 +589,6 @@ def run_discovery_job(job_id: str) -> None:
         chunks = ai_discovery.split_transcript(transcript)
         if not chunks:
             raise ValueError("Transkrip kosong atau tidak dapat dibagi menjadi bagian analisis.")
-
-        with get_connection() as connection:
-            connection.execute(
-                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=?",
-                (now_iso(), job_id),
-            )
 
         for chunk_index, chunk in enumerate(chunks):
             raw_candidates = ai_discovery.analyze_transcript_chunk(

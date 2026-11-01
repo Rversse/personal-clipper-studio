@@ -197,6 +197,11 @@ def _ending_signal(
             score -= 10
             reasons.append("gagasan berlanjut ke segmen berikutnya")
 
+    audio_adjustment, audio_reasons = _audio_boundary_adjustment(
+        float(segment["end"]), audio_features, "ending"
+    )
+    score += audio_adjustment
+    reasons.extend(audio_reasons)
     if not reasons:
         reasons.append("batas segmen transkrip")
     return max(0, min(100, score)), ", ".join(reasons)
