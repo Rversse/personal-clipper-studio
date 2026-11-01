@@ -128,6 +128,9 @@ class ExportSubtitleSegment(BaseModel):
 class ExportClipSegment(BaseModel):
     start: float = Field(ge=0, allow_inf_nan=False)
     end: float = Field(gt=0, allow_inf_nan=False)
+    crop_zoom: float | None = Field(default=None, ge=1.0, le=3.0, allow_inf_nan=False)
+    crop_x: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    crop_y: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
 
 
 class ExportSubtitleStyle(BaseModel):
