@@ -816,7 +816,6 @@ def cancel_export_job(job_id: str) -> None:
 @app.post("/api/media/{asset_id}/exports", response_model=ExportResponse, status_code=202)
 async def start_export(
     asset_id: str,
-    background_tasks: BackgroundTasks,
     payload: ExportCreate,
 ):
     if payload.end_seconds <= payload.start_seconds:
@@ -878,7 +877,7 @@ async def start_export(
                 payload.subtitle_preset, subtitle_style_payload, clip_payload, payload.crop_zoom, payload.crop_x, payload.crop_y, timestamp, timestamp,
             ),
         )
-    background_tasks.add_task(run_export_job, job_id, str(source_path), str(destination))
+    _EXPORT_WORKER_WAKE.set()
     return export_payload(job_id)
 
 
@@ -893,6 +892,12 @@ async def list_exports():
 
 @app.get("/api/exports/{job_id}", response_model=ExportResponse)
 async def get_export(job_id: str):
+    return export_payload(job_id)
+
+
+@app.post("/api/exports/{job_id}/cancel", response_model=ExportResponse)
+async def cancel_export(job_id: str):
+    cancel_export_job(job_id)
     return export_payload(job_id)
 
 
