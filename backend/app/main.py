@@ -249,15 +249,30 @@ async def get_media_thumbnail(asset_id: str):
 @app.delete("/api/media/{asset_id}", status_code=204)
 async def delete_media(asset_id: str):
     with get_connection() as connection:
+        # Reserve the SQLite writer before checking job state so a new background
+        # job cannot be queued between this check and the media-row deletion.
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT * FROM media_assets WHERE id=?", (asset_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
-        active_export = connection.execute(
-            "SELECT 1 FROM export_jobs WHERE media_id=? AND status IN ('queued','processing') LIMIT 1",
-            (asset_id,),
+        active_jobs = connection.execute(
+            """SELECT 1 FROM (
+                   SELECT id FROM transcription_jobs
+                   WHERE media_id=? AND status IN ('queued','processing')
+                   UNION ALL
+                   SELECT id FROM discovery_jobs
+                   WHERE media_id=? AND status IN ('queued','processing')
+                   UNION ALL
+                   SELECT id FROM export_jobs
+                   WHERE media_id=? AND status IN ('queued','processing')
+               ) LIMIT 1""",
+            (asset_id, asset_id, asset_id),
         ).fetchone()
-        if active_export:
-            raise HTTPException(status_code=409, detail="Video tidak dapat dihapus saat export masih berjalan.")
+        if active_jobs:
+            raise HTTPException(
+                status_code=409,
+                detail="Video tidak dapat dihapus saat transkripsi, AI discovery, atau export masih berjalan.",
+            )
         exports = connection.execute(
             "SELECT output_name FROM export_jobs WHERE media_id=? AND status='completed'",
             (asset_id,),

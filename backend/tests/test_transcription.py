@@ -275,3 +275,57 @@ def test_whisper_availability_handles_native_dll_load_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fail_native_whisper_import)
 
     assert transcription.is_available() is False
+
+
+
+def test_delete_media_is_blocked_while_transcription_or_discovery_is_active(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        timestamp = main_module.now_iso()
+        transcription_id = str(uuid.uuid4())
+        discovery_id = str(uuid.uuid4())
+
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,?,'queued','tiny',?,?)""",
+                (transcription_id, media_id, timestamp, timestamp),
+            )
+
+        source_path = database.MEDIA_DIR / f"{media_id}.mp4"
+        blocked_transcription = client.delete(f"/api/media/{media_id}")
+        assert blocked_transcription.status_code == 409
+        assert source_path.is_file()
+
+        with database.get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='failed' WHERE id=?",
+                (transcription_id,),
+            )
+            connection.execute(
+                """INSERT INTO discovery_jobs(
+                    id,media_id,transcription_id,status,provider,model_name,mode,
+                    min_duration,max_duration,created_at,updated_at
+                ) VALUES(?,?,?,'processing','test','test-model','auto',15,60,?,?)""",
+                (discovery_id, media_id, transcription_id, timestamp, timestamp),
+            )
+
+        blocked_discovery = client.delete(f"/api/media/{media_id}")
+        assert blocked_discovery.status_code == 409
+        assert source_path.is_file()
+
+        with database.get_connection() as connection:
+            connection.execute(
+                "UPDATE discovery_jobs SET status='failed' WHERE id=?",
+                (discovery_id,),
+            )
+
+        deleted = client.delete(f"/api/media/{media_id}")
+        assert deleted.status_code == 204
+        assert not source_path.exists()
+        with database.get_connection() as connection:
+            assert connection.execute(
+                "SELECT 1 FROM media_assets WHERE id=?", (media_id,)
+            ).fetchone() is None
