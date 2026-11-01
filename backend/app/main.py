@@ -810,8 +810,8 @@ def cancel_export_job(job_id: str) -> None:
             )
         return
     control.cancel()
-    # Keep the active state until run_export_job observes RenderCancelled and finalizes cleanup.
-    deadline = time.monotonic() + 10
+    # The active worker persists the terminal state after its renderer cleanup.
+    deadline = time.monotonic() + 30
     while rendering.get_control(job_id) is not None and time.monotonic() < deadline:
         time.sleep(0.05)
 
