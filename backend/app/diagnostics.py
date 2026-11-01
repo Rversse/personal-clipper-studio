@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
@@ -60,11 +61,17 @@ def _ollama_status(endpoint: str, model: str) -> dict[str, Any]:
             "models": [],
         }
 
-    url = endpoint.rstrip("/") + "/api/tags"
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    path = (parsed.path.rstrip("/") if parsed.path else "") + "/api/tags"
+    connection = http.client.HTTPConnection(host, parsed.port or 80, timeout=2)
     try:
-        with urllib.request.urlopen(request, timeout=2) as response:
-            payload = json.loads(response.read(1024 * 1024 + 1).decode("utf-8"))
+        connection.request("GET", path, headers={"Accept": "application/json"})
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ValueError("Ollama returned a non-success status")
+        raw = response.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError("Ollama response exceeded the diagnostics limit")
+        payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
             raise ValueError("Invalid Ollama tags response")
         names = [
@@ -81,12 +88,14 @@ def _ollama_status(endpoint: str, model: str) -> dict[str, Any]:
             "model_available": available,
             "models": names[:50],
         }
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+    except (http.client.HTTPException, TimeoutError, OSError, ValueError, json.JSONDecodeError):
         return {
             "connection": "unreachable",
             "model_available": False,
             "models": [],
         }
+    finally:
+        connection.close()
 
 
 def runtime_diagnostics() -> dict[str, Any]:
