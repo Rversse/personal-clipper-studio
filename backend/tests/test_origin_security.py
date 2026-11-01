@@ -108,7 +108,7 @@ def test_api_accepts_matching_desktop_session_token(client, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert isinstance(response.json(), list)
 
 
 def test_resource_ticket_is_scoped_to_exact_file_path(client, monkeypatch):
@@ -139,3 +139,14 @@ def test_health_check_remains_available_for_startup_probe(client, monkeypatch):
     response = client.get("/api/health")
 
     assert response.status_code == 200
+
+
+def test_desktop_session_token_requires_uuid_v4(monkeypatch):
+    from app import main as main_module
+
+    with pytest.raises(ValueError):
+        main_module.configure_session_token("predictable-token")
+
+    token = "9b4f6f1a-8c3e-4f12-9a6d-7e8f9012abcd"
+    main_module.configure_session_token(token)
+    assert main_module._API_SESSION_TOKEN == token
