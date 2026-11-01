@@ -39,7 +39,7 @@ def validate_api_key(value: str) -> str:
     key = value.strip()
     if not key:
         raise ValueError("Gemini API key tidak boleh kosong.")
-    if len(key) > MAX_API_KEY_LENGTH or re.search(r"[\x00-\x1f\x7f]", key):
+    if len(key) > MAX_API_KEY_LENGTH or any(char.isspace() for char in key) or re.search(r"[\x00-\x1f\x7f]", key):
         raise ValueError("Format Gemini API key tidak valid.")
     return key
 
