@@ -176,3 +176,77 @@ def test_provider_parser_handles_json_code_fences_and_thinking():
     )
     parsed = ai_discovery._extract_json(text)
     assert parsed == {"candidates": []}
+
+
+def test_context_aware_boundaries_prefer_complete_sentence_and_payoff():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [
+        {"start": 0.0, "end": 10.0, "text": "Ini konteks awal yang penting."},
+        {"start": 10.0, "end": 17.0, "text": "Karena kalau dilakukan begitu saja"},
+        {"start": 17.0, "end": 24.0, "text": "hasilnya justru menjadi lebih buruk."},
+        {"start": 24.0, "end": 32.0, "text": "Dan inilah bagian yang mengejutkan."},
+        {"start": 32.0, "end": 40.0, "text": "Semua akhirnya bisa diselesaikan."},
+    ]
+    refined = refine_candidate_boundaries(11.0, 18.0, transcript, 15, 35)
+    assert refined is not None
+    assert refined["start_seconds"] == 10.0
+    assert refined["end_seconds"] == 24.0
+    assert refined["boundary_quality"] >= 60
+    assert "kata sambung" in refined["opening_boundary"]
+    assert "akhir kalimat" in refined["ending_boundary"]
+
+
+def test_context_aware_boundary_refinement_includes_lead_in_when_semantic_anchor_is_late():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [
+        {"start": 0.0, "end": 8.0, "text": "Ada satu hal yang harus dipahami terlebih dahulu."},
+        {"start": 8.0, "end": 15.0, "text": "Sebab tanpa konteks itu"},
+        {"start": 15.0, "end": 23.0, "text": "orang akan salah memahami hasil akhirnya."},
+        {"start": 23.0, "end": 30.0, "text": "Dan ini menjadi pelajaran penting."},
+        {"start": 30.0, "end": 38.0, "text": "Itulah alasan mengapa prosesnya harus utuh."},
+    ]
+    refined = refine_candidate_boundaries(17.0, 30.0, transcript, 15, 35)
+    assert refined is not None
+    assert refined["start_seconds"] == 8.0
+    assert refined["end_seconds"] == 30.0
+    assert refined["boundary_quality"] >= 50
+
+
+def test_context_aware_boundary_refinement_rejects_duration_outside_window():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [
+        {"start": 0.0, "end": 5.0, "text": "Kalimat pertama."},
+        {"start": 5.0, "end": 10.0, "text": "Kalimat kedua."},
+        {"start": 10.0, "end": 15.0, "text": "Kalimat ketiga."},
+    ]
+    assert refine_candidate_boundaries(0.0, 5.0, transcript, 15, 30) is None
+
+
+def test_normalize_candidate_returns_boundary_quality_metadata():
+    from app.main import normalize_candidate
+
+    transcript = [
+        {"start": 0.0, "end": 10.0, "text": "Pembuka yang lengkap."},
+        {"start": 10.0, "end": 20.0, "text": "Penjelasan berikutnya."},
+        {"start": 20.0, "end": 30.0, "text": "Kesimpulan yang jelas."},
+        {"start": 30.0, "end": 40.0, "text": "Tambahan konteks."},
+        {"start": 40.0, "end": 50.0, "text": "Jawaban akhirnya ditemukan."},
+        {"start": 50.0, "end": 60.0, "text": "Cerita selesai."},
+    ]
+    raw = {
+        "start_seconds": 1, "end_seconds": 56,
+        "title": "Kandidat", "hook": "Pembuka yang kuat",
+        "summary": "Ringkasan.", "rationale": "Utuh.",
+        "score": 88, "category": "education",
+    }
+    candidate = normalize_candidate(raw, transcript, 30, 60)
+    assert candidate is not None
+    assert candidate["start_seconds"] == 0
+    assert candidate["end_seconds"] == 60
+    assert 0 <= candidate["boundary_quality"] <= 100
+    assert candidate["opening_boundary"]
+    assert candidate["ending_boundary"]
+    assert candidate["context_note"]
