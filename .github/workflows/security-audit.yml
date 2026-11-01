@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: security-audit-${{ github.workflow }}-${{ github.ref }}
@@ -21,13 +20,15 @@ jobs:
   secret-history:
     name: Scan repository history for leaked secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout full Git history
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Scan Git history with Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_COMMENTS: "false"
+      - name: Scan all refs and Git history with Gitleaks
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" \
+            zricethee/gitleaks:latest \
+            detect --source=/repo --log-opts=--all --redact --verbose
