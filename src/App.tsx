@@ -96,6 +96,12 @@ function App() {
     index: number; mode: "move" | "start" | "end"; startX: number;
     initialStart: number; initialEnd: number; secondsPerPixel: number;
   } | null>(null);
+  const wordTimingDragRef = useRef<{
+    segment: TranscriptSegment; wordIndex: number;
+    mode: "move" | "start" | "end"; startX: number;
+    initialStart: number; initialEnd: number; secondsPerPixel: number;
+    minStart: number; maxEnd: number;
+  } | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [editorSaved, setEditorSaved] = useState(false);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
@@ -274,12 +280,14 @@ function App() {
       const words = segment.words?.length
         ? segment.words.map((word,wordIndex)=>currentWordTiming(segment.id,wordIndex,word))
         : [];
-      if (words.length) {
-        return words.filter(word => selectedClips.some(clip=>word.end>clip.start&&word.start<clip.end))
-          .map(word=>({start:word.start,end:word.end,text:word.text}));
+      const correctedText = subtitleText[index];
+      if (words.length && (!correctedText || correctedText === segment.text)) {
+        return words
+          .map(word=>({start:Math.max(word.start,timing.start),end:Math.min(word.end,timing.end),text:word.text}))
+          .filter(word=>word.end>word.start && selectedClips.some(clip=>word.end>clip.start&&word.start<clip.end));
       }
       return selectedClips.some(clip=>timing.end>clip.start&&timing.start<clip.end)
-        ? [{start:timing.start,end:timing.end,text:subtitleText[index] ?? segment.text}]
+        ? [{start:timing.start,end:timing.end,text:correctedText ?? segment.text}]
         : [];
     });
     setExportBusy(true);
@@ -621,6 +629,86 @@ function App() {
       setError(error instanceof Error ? error.message : "Gagal menyimpan timing kata.");
     } finally {setWordBusy("");}
   }
+  function getWordDragRange(drag: NonNullable<typeof wordTimingDragRef.current>, clientX: number) {
+    const delta = (clientX - drag.startX) * drag.secondsPerPixel;
+    const duration = drag.initialEnd - drag.initialStart;
+    let start = drag.initialStart;
+    let end = drag.initialEnd;
+    if (drag.mode === "move") {
+      start = Math.max(drag.minStart, Math.min(drag.maxEnd - duration, drag.initialStart + delta));
+      end = start + duration;
+    } else if (drag.mode === "start") {
+      start = Math.max(drag.minStart, Math.min(drag.initialEnd - 0.01, drag.initialStart + delta));
+    } else {
+      end = Math.min(drag.maxEnd, Math.max(drag.initialStart + 0.01, drag.initialEnd + delta));
+    }
+    return { start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) };
+  }
+
+  function beginWordTiming(
+    event: React.PointerEvent<HTMLElement>,
+    segment: TranscriptSegment,
+    wordIndex: number,
+    mode: "move" | "start" | "end",
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const lane = event.currentTarget.closest(".word-timing-lane") as HTMLDivElement | null;
+    const captureTarget = event.currentTarget.closest(".timeline-word-clip") as HTMLElement | null;
+    const word = segment.words?.[wordIndex];
+    if (!lane || !captureTarget || !word) return;
+    const timing = currentWordTiming(segment.id, wordIndex, word);
+    const previousWord = wordIndex > 0 ? segment.words[wordIndex - 1] : undefined;
+    const nextWord = wordIndex < segment.words.length - 1 ? segment.words[wordIndex + 1] : undefined;
+    const previousTiming = previousWord ? currentWordTiming(segment.id, wordIndex - 1, previousWord) : undefined;
+    const nextTiming = nextWord ? currentWordTiming(segment.id, wordIndex + 1, nextWord) : undefined;
+    captureTarget.setPointerCapture(event.pointerId);
+    wordTimingDragRef.current = {
+      segment, wordIndex, mode, startX: event.clientX,
+      initialStart: timing.start, initialEnd: timing.end,
+      secondsPerPixel: timelineTotalDuration / Math.max(1, lane.getBoundingClientRect().width),
+      minStart: previousTiming?.end ?? segment.start,
+      maxEnd: nextTiming?.start ?? segment.end,
+    };
+  }
+
+  function moveWordTiming(event: React.PointerEvent<HTMLElement>) {
+    const drag = wordTimingDragRef.current;
+    if (!drag) return;
+    const range = getWordDragRange(drag, event.clientX);
+    const key = wordKey(drag.segment.id, drag.wordIndex);
+    const current = currentWordTiming(drag.segment.id, drag.wordIndex, drag.segment.words[drag.wordIndex]);
+    setWordTiming(previous => ({ ...previous, [key]: { ...current, ...range } }));
+  }
+
+  function finishWordTiming(event: React.PointerEvent<HTMLElement>) {
+    const drag = wordTimingDragRef.current;
+    if (!drag) return;
+    const range = getWordDragRange(drag, event.clientX);
+    const word = drag.segment.words[drag.wordIndex];
+    const current = currentWordTiming(drag.segment.id, drag.wordIndex, word);
+    const next = { ...current, ...range };
+    const key = wordKey(drag.segment.id, drag.wordIndex);
+    wordTimingDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setWordTiming(previous => ({ ...previous, [key]: next }));
+    void saveWordTiming(drag.segment, drag.wordIndex, next);
+  }
+
+  function cancelWordTiming(event: React.PointerEvent<HTMLElement>) {
+    const drag = wordTimingDragRef.current;
+    if (drag) {
+      const key = wordKey(drag.segment.id, drag.wordIndex);
+      setWordTiming(previous => { const copy = { ...previous }; delete copy[key]; return copy; });
+    }
+    wordTimingDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   function updateSubtitleRange(index: number, edge: "start" | "end", value: number) {
     const segment = timelineTranscriptSegments[index];
     if (!segment || !Number.isFinite(value)) return;
@@ -960,8 +1048,51 @@ function App() {
                           {timelineClips.length>0&&timelineTranscriptSegments.length===0&&<span className="timeline-empty-hint">Transcribe video to populate caption track</span>}
                         </div>
                       </div>
+                      <div className="multitrack-row">
+                        <div className="multitrack-label"><b>WORDS</b><small>Word timing · drag to adjust</small></div>
+                        <div className="multitrack-lane word-timing-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
+                          {timelineClips.flatMap((clip,clipIndex)=>{
+                            const offset=timelineClips.slice(0,clipIndex).reduce((sum,item)=>sum+item.end-item.start,0);
+                            return timelineTranscriptSegments.flatMap((segment,segmentIndex)=>(segment.words ?? []).flatMap((word,wordIndex)=>{
+                              const timing=currentWordTiming(segment.id,wordIndex,word);
+                              if(timing.end<=clip.start || timing.start>=clip.end) return [];
+                              const start=Math.max(timing.start,clip.start);
+                              const end=Math.min(timing.end,clip.end);
+                              const key=wordKey(segment.id,wordIndex);
+                              const dragProps={
+                                onPointerMove:moveWordTiming,
+                                onPointerUp:finishWordTiming,
+                                onPointerCancel:cancelWordTiming,
+                              };
+                              const isActive=playheadSeconds>=timing.start && playheadSeconds<=timing.end;
+                              return [<button
+                                type="button"
+                                key={"word-"+clipIndex+"-"+segmentIndex+"-"+wordIndex}
+                                className={"timeline-word-clip"+(isActive?" active":"")}
+                                style={{
+                                  left:((offset+start-clip.start)/timelineTotalDuration*100)+"%",
+                                  width:((end-start)/timelineTotalDuration*100)+"%"
+                                }}
+                                title={word.text+" · "+formatTimestamp(timing.start)+"–"+formatTimestamp(timing.end)}
+                                aria-label={"Word "+word.text+", "+formatTimestamp(timing.start)+" to "+formatTimestamp(timing.end)}
+                                onPointerDown={event=>beginWordTiming(event,segment,wordIndex,"move")}
+                                {...dragProps}
+                                onClick={event=>{
+                                  event.stopPropagation();
+                                  if(clipSequence.length) selectSequenceClip(clip,clipIndex,false);
+                                  seekPreview(timing.start);
+                                }}>
+                                <span className="word-trim-handle left" title="Trim word start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginWordTiming(event,segment,wordIndex,"start")}/>
+                                <span className="word-clip-text">{timing.text}</span>
+                                <span className="word-trim-handle right" title="Trim word end" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginWordTiming(event,segment,wordIndex,"end")}/>
+                              </button>];
+                            }));
+                          })}
+                          {timelineClips.length>0&&!timelineTranscriptSegments.some(segment=>segment.words?.length)&&<span className="timeline-empty-hint">Word timestamps unavailable · segment caption fallback is active</span>}
+                        </div>
+                      </div>
                       <div className="multitrack-footer">
-                        <span>Drag clip blocks to reorder · drag trim handles to adjust in/out points</span>
+                        <span>Drag clips to reorder · trim captions or individual words for precise timing</span>
                         <button className="secondary-button" onClick={splitSelectedTimelineClip} disabled={!timelineClips.length || playheadSeconds<=((timelineSelectedIndex===null?editStart:timelineClips[timelineSelectedIndex].start)+0.1) || playheadSeconds>=((timelineSelectedIndex===null?editEnd:timelineClips[timelineSelectedIndex].end)-0.1)}>Split selected at playhead</button>
                       </div>
                     </section>

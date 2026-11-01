@@ -41,6 +41,7 @@
 - [x] Context-aware AI candidate boundary refinement using punctuation, natural pauses, conjunction and sentence-continuation signals
 - [x] Persist/display boundary quality score and opening/ending rationale on candidates
 - [x] Word-level transcription timestamps, persistence, API exposure, and per-word Subtitle Studio timing corrections
+- [x] Word-level timeline visualization with direct drag/trim editing, server persistence, and segment-level fallback
 - [ ] Word-level boundary alignment and prosody-aware semantic cut detection
 
 ## Phase 5 — rendering and delivery (partial)
