@@ -39,12 +39,17 @@ def _binary_info(name: str) -> dict[str, Any]:
 
 def _ollama_status(endpoint: str, model: str) -> dict[str, Any]:
     """Check only a loopback Ollama instance; never send diagnostics to remote hosts."""
-    parsed = urlsplit(endpoint)
-    host = parsed.hostname or ""
     try:
+        parsed = urlsplit(endpoint)
+        host = parsed.hostname or ""
+        port = parsed.port or 80
         loopback = host.lower() == "localhost" or ipaddress.ip_address(host).is_loopback
     except ValueError:
-        loopback = False
+        return {
+            "connection": "not_tested_unsafe_endpoint",
+            "model_available": None,
+            "models": [],
+        }
     if (
         parsed.scheme != "http"
         or not loopback
@@ -60,7 +65,7 @@ def _ollama_status(endpoint: str, model: str) -> dict[str, Any]:
         }
 
     path = (parsed.path.rstrip("/") if parsed.path else "") + "/api/tags"
-    connection = http.client.HTTPConnection(host, parsed.port or 80, timeout=2)
+    connection = http.client.HTTPConnection(host, port, timeout=2)
     try:
         connection.request("GET", path, headers={"Accept": "application/json"})
         response = connection.getresponse()
