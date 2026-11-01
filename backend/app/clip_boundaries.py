@@ -44,7 +44,88 @@ def _gap(left: dict[str, Any], right: dict[str, Any]) -> float:
     return max(0.0, float(right["start"]) - float(left["end"]))
 
 
-def _opening_signal(segments: list[dict[str, Any]], index: int) -> tuple[int, str]:
+
+
+def _audio_boundary_adjustment(
+    timestamp: float,
+    audio_features: dict[str, Any] | None,
+    edge: str,
+) -> tuple[int, list[str]]:
+    """Return a small prosody adjustment from nearby pauses and RMS changes."""
+    if not isinstance(audio_features, dict) or edge not in {"opening", "ending"}:
+        return 0, []
+    adjustment = 0
+    reasons: list[str] = []
+
+    for silence in audio_features.get("silences", []):
+        if not isinstance(silence, dict):
+            continue
+        try:
+            silence_start = float(silence["start"])
+            silence_end = float(silence["end"])
+            if (
+                not math.isfinite(silence_start)
+                or not math.isfinite(silence_end)
+                or silence_end <= silence_start
+            ):
+                continue
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+
+        if edge == "opening" and abs(timestamp - silence_end) <= 0.4:
+            adjustment += 10
+            reasons.append("setelah jeda audio alami")
+            break
+        if edge == "ending" and abs(timestamp - silence_start) <= 0.4:
+            adjustment += 10
+            reasons.append("sebelum jeda audio alami")
+            break
+
+    samples = []
+    for sample in audio_features.get("energy_samples", []):
+        if not isinstance(sample, dict):
+            continue
+        try:
+            sample_time = float(sample["time"])
+            rms_db = float(sample["rms_db"])
+            if math.isfinite(sample_time) and math.isfinite(rms_db):
+                samples.append((sample_time, rms_db))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+
+    before = [
+        level for sample_time, level in samples
+        if timestamp - 1.5 <= sample_time <= timestamp - 0.15
+    ]
+    after = [
+        level for sample_time, level in samples
+        if timestamp + 0.15 <= sample_time <= timestamp + 1.5
+    ]
+    if before and after:
+        before_level = sum(before) / len(before)
+        after_level = sum(after) / len(after)
+        change = after_level - before_level
+        if edge == "opening":
+            if change >= 4.0:
+                adjustment += 4
+                reasons.append("energi bicara menguat pada pembuka")
+            elif change <= -6.0:
+                adjustment -= 3
+                reasons.append("energi bicara melemah pada pembuka")
+        else:
+            if change <= -4.0:
+                adjustment += 4
+                reasons.append("energi bicara mereda pada penutup")
+            elif change >= 6.0:
+                adjustment -= 3
+                reasons.append("energi bicara masih menguat setelah penutup")
+
+    return max(-8, min(14, adjustment)), reasons
+def _opening_signal(
+    segments: list[dict[str, Any]],
+    index: int,
+    audio_features: dict[str, Any] | None = None,
+) -> tuple[int, str]:
     segment = segments[index]
     current = _text(segment)
     previous = segments[index - 1] if index > 0 else None
@@ -75,12 +156,21 @@ def _opening_signal(segments: list[dict[str, Any]], index: int) -> tuple[int, st
     if _starts_continuation(current):
         score -= 22
         reasons.append("dimulai dengan kata sambung")
+    audio_adjustment, audio_reasons = _audio_boundary_adjustment(
+        float(segment["start"]), audio_features, "opening"
+    )
+    score += audio_adjustment
+    reasons.extend(audio_reasons)
     if not reasons:
         reasons.append("batas segmen transkrip")
     return max(0, min(100, score)), ", ".join(reasons)
 
 
-def _ending_signal(segments: list[dict[str, Any]], index: int) -> tuple[int, str]:
+def _ending_signal(
+    segments: list[dict[str, Any]],
+    index: int,
+    audio_features: dict[str, Any] | None = None,
+) -> tuple[int, str]:
     segment = segments[index]
     current = _text(segment)
     following = segments[index + 1] if index + 1 < len(segments) else None
@@ -177,7 +267,10 @@ def _collect_valid_words(segments: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _word_opening_signal(
-    words: list[dict[str, Any]], index: int, segments: list[dict[str, Any]]
+    words: list[dict[str, Any]],
+    index: int,
+    segments: list[dict[str, Any]],
+    audio_features: dict[str, Any] | None = None,
 ) -> tuple[int, str]:
     current = words[index]
     previous = words[index - 1] if index > 0 else None
@@ -210,16 +303,26 @@ def _word_opening_signal(
         previous is None or previous["segment_index"] != current["segment_index"]
     )
     if is_first_word_in_segment:
-        segment_quality, _ = _opening_signal(segments, current["segment_index"])
+        segment_quality, _ = _opening_signal(
+            segments, current["segment_index"], audio_features
+        )
         if segment_quality >= 75:
             score += min(7, round((segment_quality - 65) * 0.25))
             reasons.append("konteks awal segmen mendukung")
 
+    audio_adjustment, audio_reasons = _audio_boundary_adjustment(
+        current["start"], audio_features, "opening"
+    )
+    score += audio_adjustment
+    reasons.extend(audio_reasons)
     return max(0, min(100, score)), ", ".join(reasons)
 
 
 def _word_ending_signal(
-    words: list[dict[str, Any]], index: int, segments: list[dict[str, Any]]
+    words: list[dict[str, Any]],
+    index: int,
+    segments: list[dict[str, Any]],
+    audio_features: dict[str, Any] | None = None,
 ) -> tuple[int, str]:
     current = words[index]
     following = words[index + 1] if index + 1 < len(words) else None
@@ -253,11 +356,18 @@ def _word_ending_signal(
         following is None or following["segment_index"] != current["segment_index"]
     )
     if is_last_word_in_segment:
-        segment_quality, _ = _ending_signal(segments, current["segment_index"])
+        segment_quality, _ = _ending_signal(
+            segments, current["segment_index"], audio_features
+        )
         if segment_quality >= 75:
             score += min(7, round((segment_quality - 65) * 0.25))
             reasons.append("konteks akhir segmen mendukung")
 
+    audio_adjustment, audio_reasons = _audio_boundary_adjustment(
+        current["end"], audio_features, "ending"
+    )
+    score += audio_adjustment
+    reasons.extend(audio_reasons)
     return max(0, min(100, score)), ", ".join(reasons)
 
 
@@ -267,6 +377,7 @@ def _refine_with_word_boundaries(
     segments: list[dict[str, Any]],
     min_duration: int,
     max_duration: int,
+    audio_features: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     words = _collect_valid_words(segments)
     if not words:
@@ -276,14 +387,18 @@ def _refine_with_word_boundaries(
     for index, word in enumerate(words):
         boundary = word["start"]
         if target_start - 10.0 <= boundary <= target_start + 2.0:
-            quality, reason = _word_opening_signal(words, index, segments)
+            quality, reason = _word_opening_signal(
+                words, index, segments, audio_features
+            )
             starts.append((boundary, quality, reason, index))
 
     ends = []
     for index, word in enumerate(words):
         boundary = word["end"]
         if target_end - 2.0 <= boundary <= target_end + 10.0:
-            quality, reason = _word_ending_signal(words, index, segments)
+            quality, reason = _word_ending_signal(
+                words, index, segments, audio_features
+            )
             ends.append((boundary, quality, reason, index))
 
     if not starts or not ends:
@@ -326,8 +441,9 @@ def refine_candidate_boundaries(
     segments: list[dict[str, Any]],
     min_duration: int,
     max_duration: int,
+    audio_features: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Snap an AI proposal to sentence- and pause-aware Whisper segment boundaries.
+    """Snap an AI proposal to word boundaries and use local audio prosody when available.
 
     The proposal remains the semantic anchor. Starts may move up to 10 seconds
     earlier (or 2 seconds later), while endings may move up to 10 seconds later
@@ -354,7 +470,7 @@ def refine_candidate_boundaries(
         return None
 
     word_refined = _refine_with_word_boundaries(
-        target_start, target_end, ordered, min_duration, max_duration
+        target_start, target_end, ordered, min_duration, max_duration, audio_features
     )
     if word_refined is not None:
         return word_refined
@@ -363,14 +479,14 @@ def refine_candidate_boundaries(
     for index, segment in enumerate(ordered):
         boundary = float(segment["start"])
         if target_start - 10.0 <= boundary <= target_start + 2.0:
-            quality, reason = _opening_signal(ordered, index)
+            quality, reason = _opening_signal(ordered, index, audio_features)
             starts.append((boundary, quality, reason, index))
 
     ends = []
     for index, segment in enumerate(ordered):
         boundary = float(segment["end"])
         if target_end - 2.0 <= boundary <= target_end + 10.0:
-            quality, reason = _ending_signal(ordered, index)
+            quality, reason = _ending_signal(ordered, index, audio_features)
             ends.append((boundary, quality, reason, index))
 
     best: tuple[float, dict[str, Any]] | None = None

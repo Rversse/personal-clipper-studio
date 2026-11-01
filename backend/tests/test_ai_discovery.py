@@ -375,6 +375,17 @@ def test_discovery_job_loads_persisted_words_for_candidate_refinement(tmp_path, 
         }]
 
     monkeypatch.setattr(ai_discovery, "analyze_transcript_chunk", fake_analyze)
+    monkeypatch.setattr(
+        main_module.audio_analysis,
+        "analyze_audio",
+        lambda source, duration=None: {
+            "energy_samples": [],
+            "silences": [
+                {"start": 9.7, "end": 10.1, "duration": 0.4},
+                {"start": 59.9, "end": 60.4, "duration": 0.5},
+            ],
+        },
+    )
 
     with TestClient(app) as client:
         media_id, transcript_id = seed_completed_transcript()
@@ -426,3 +437,30 @@ def test_word_continuation_detection_handles_standalone_tokens():
     assert _word_starts_continuation("karena")
     assert _word_starts_continuation("yang,")
     assert not _word_starts_continuation("dunia.")
+
+
+
+def test_audio_pause_prosody_adjusts_segment_boundaries():
+    from app.clip_boundaries import refine_candidate_boundaries
+
+    transcript = [
+        {"start": 0.0, "end": 10.0, "text": "Konteks sebelumnya sudah selesai."},
+        {"start": 10.0, "end": 20.0, "text": "Jawaban akhirnya sudah lengkap."},
+    ]
+    audio_features = {
+        "energy_samples": [],
+        "silences": [
+            {"start": 9.7, "end": 10.0, "duration": 0.3},
+            {"start": 20.0, "end": 20.5, "duration": 0.5},
+        ],
+    }
+
+    refined = refine_candidate_boundaries(
+        10.1, 19.0, transcript, 5, 15, audio_features=audio_features
+    )
+
+    assert refined is not None
+    assert refined["start_seconds"] == 10.0
+    assert refined["end_seconds"] == 20.0
+    assert "jeda audio alami" in refined["opening_boundary"]
+    assert "jeda audio alami" in refined["ending_boundary"]

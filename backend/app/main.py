@@ -22,7 +22,7 @@ from .schemas import (
     TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, TranscriptWordUpdate,
     ExportCreate, ExportResponse,
 )
-from . import ai_discovery, transcription, rendering
+from . import ai_discovery, transcription, rendering, audio_analysis
 
 _EXPORT_WORKER_LOCK = threading.Lock()
 _EXPORT_WORKER_WAKE = threading.Event()
@@ -473,6 +473,7 @@ def normalize_candidate(
     min_duration: int,
     max_duration: int,
     context_segments: list[dict] | None = None,
+    audio_features: dict | None = None,
 ) -> dict | None:
     import math
 
@@ -494,7 +495,8 @@ def normalize_candidate(
         return None
 
     refined = refine_candidate_boundaries(
-        target_start, target_end, context_segments or chunk, min_duration, max_duration
+        target_start, target_end, context_segments or chunk, min_duration, max_duration,
+        audio_features=audio_features,
     )
     if refined is None:
         return None
@@ -547,6 +549,10 @@ def run_discovery_job(job_id: str) -> None:
                    WHERE job_id=? ORDER BY segment_id,word_index""",
                 (job["transcription_id"],),
             ).fetchall()
+            media = connection.execute(
+                "SELECT stored_name,duration FROM media_assets WHERE id=?",
+                (job["media_id"],),
+            ).fetchone()
         words_by_segment: dict[int, list[dict]] = {}
         for word in word_rows:
             words_by_segment.setdefault(int(word["segment_id"]), []).append({
@@ -559,6 +565,16 @@ def run_discovery_job(job_id: str) -> None:
             {**dict(item), "words": words_by_segment.get(int(item["id"]), [])}
             for item in segments
         ]
+        audio_features = None
+        if media is not None:
+            try:
+                source_path = MEDIA_DIR / media["stored_name"]
+                audio_features = audio_analysis.analyze_audio(
+                    source_path, duration=media["duration"]
+                )
+            except Exception:
+                # Prosody is supplemental; unavailable audio analysis must not block discovery.
+                audio_features = None
         if not transcript:
             raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
         chunks = ai_discovery.split_transcript(transcript)
@@ -586,6 +602,7 @@ def run_discovery_job(job_id: str) -> None:
                 candidate = normalize_candidate(
                     raw, chunk, job["min_duration"], job["max_duration"],
                     context_segments=transcript,
+                    audio_features=audio_features,
                 )
                 if candidate is None or candidate["score"] < 40:
                     continue
