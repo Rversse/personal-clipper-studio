@@ -7,18 +7,11 @@ import ssl
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from fastapi import APIRouter, HTTPException, Request
 
 from . import credentials
 
 router = APIRouter()
-
-
-class GeminiKeyPayload(BaseModel):
-    model_config = ConfigDict(hide_input_in_errors=True)
-
-    api_key: SecretStr = Field(min_length=1, max_length=credentials.MAX_API_KEY_LENGTH)
 
 
 def _model_name() -> str:
@@ -85,9 +78,18 @@ async def get_ai_settings() -> dict[str, Any]:
 
 
 @router.put("/api/settings/ai/gemini-key")
-async def put_gemini_key(payload: GeminiKeyPayload) -> dict[str, Any]:
+async def put_gemini_key(request: Request) -> dict[str, Any]:
+    raw_body = await request.body()
+    if len(raw_body) > 4096:
+        raise HTTPException(status_code=413, detail="Request konfigurasi terlalu besar.")
     try:
-        credentials.save_gemini_api_key(payload.api_key.get_secret_value())
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=400, detail="Format request konfigurasi tidak valid.") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("api_key"), str):
+        raise HTTPException(status_code=422, detail="Gemini API key harus berupa teks.")
+    try:
+        credentials.save_gemini_api_key(payload["api_key"])
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except credentials.CredentialStoreUnavailable as error:
