@@ -27,7 +27,7 @@ Open **Settings → System check** in the desktop app to inspect required and op
 
 Python does not need a separate installation for the packaged Windows app. The CPU Whisper runtime is bundled; selected Whisper model weights download automatically on first use. If the bundled runtime itself is unavailable, repair or reinstall the application rather than installing Python packages into a separate system Python environment. After installing FFmpeg, restart the desktop app and run **Check again** so the backend receives the updated `PATH`.
 
-The System Check is diagnostic only: it does not install software, test Gemini credentials with a network request, or prove that an Ollama server/model is reachable. It never displays API keys or the Ollama endpoint URL.
+The System Check is diagnostic only and does not install software. It does not test Gemini credentials with a network request. When Ollama is selected, it makes a short local HTTP check to the configured loopback address (`localhost`, `127.0.0.1`, or `::1`) and reads `/api/tags` to confirm whether the selected model is present. Non-loopback Ollama endpoints are deliberately not contacted. The page never displays API keys, endpoint URLs, or remote service details.
 
 ## First launch
 
