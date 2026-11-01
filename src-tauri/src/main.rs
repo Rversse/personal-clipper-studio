@@ -34,7 +34,20 @@ fn shutdown_backend(child: &mut Child) {
         }
     }
 
-    let _ = child.kill();
+    // A backend task may own FFmpeg/FFprobe descendants. Killing only the
+    // backend process can orphan those children, so use taskkill /T as the
+    // bounded fallback after the graceful shutdown window.
+    let pid = child.id().to_string();
+    use std::os::windows::process::CommandExt;
+    let tree_terminated = Command::new("taskkill.exe")
+        .args(["/PID", pid.as_str(), "/T", "/F"])
+        .creation_flags(0x08000000)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !tree_terminated {
+        let _ = child.kill();
+    }
     let _ = child.wait();
 }
 
