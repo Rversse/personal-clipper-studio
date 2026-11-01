@@ -18,30 +18,51 @@ jobs:
     name: Frontend typecheck and build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 20
-      - run: npm install
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".nvmrc"
+      - run: npm ci
+      - name: Audit frontend dependencies for known vulnerabilities
+        run: npm audit --audit-level=high
       - run: npm run build
-
   backend:
     name: Backend import and health check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+        with:
+          toolchain: "1.99.1"
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit Rust dependencies
+        run: cargo audit --file src-tauri/Cargo.lock
       - name: Install FFmpeg for audio analysis smoke tests
         run: |
           sudo apt-get update
           sudo apt-get install --yes ffmpeg
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev]"
-        working-directory: backend
+      - name: Install pinned uv package manager
+        run: python -m pip install "uv==0.13.6"
+      - name: Install backend dependencies from the committed lockfile
+        run: uv sync --project backend --extra dev --extra transcription --extra build --locked
+      - name: Upgrade vulnerable Python build tooling
+        run: uv pip install --python backend/.venv/bin/python --upgrade "setuptools>=84.1.0"
+      - name: Audit installed Python dependencies for known vulnerabilities
+        run: |
+          uv pip install --python backend/.venv/bin/python "pip-audit==2.10.1"
+          uv run --project backend --extra dev --extra transcription --extra build --no-sync pip-audit --local
       - name: Run backend tests
-        run: pytest -q
+        run: uv run --project . --extra dev --no-sync pytest -q
         working-directory: backend
       - name: Verify API imports
-        run: python -c "from app.main import app; print(app.title)"
+        run: uv run --project . --extra dev --no-sync python -c "from app.main import app; print(app.title)"
         working-directory: backend

@@ -10,21 +10,13 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 
 from . import credentials
+from .security import ALLOWED_UI_ORIGINS
 
 router = APIRouter()
 
-_ALLOWED_UI_ORIGINS = {
-    "http://127.0.0.1:1420",
-    "http://localhost:1420",
-    "http://tauri.localhost",
-    "https://tauri.localhost",
-    "tauri://localhost",
-}
-
-
 def _require_trusted_origin(request: Request) -> None:
     origin = request.headers.get("origin")
-    if origin and origin not in _ALLOWED_UI_ORIGINS:
+    if origin and origin not in ALLOWED_UI_ORIGINS:
         raise HTTPException(status_code=403, detail="Origin tidak diizinkan untuk pengaturan AI.")
 
 
