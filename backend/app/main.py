@@ -396,21 +396,35 @@ async def import_media(project_id: str, file: UploadFile = File(...)):
     asset_id = str(uuid.uuid4())
     stored_name = f"{asset_id}{extension}"
     destination = MEDIA_DIR / stored_name
+    # Keep incomplete uploads out of the namespace used by persisted media rows.
+    staged_source = MEDIA_DIR / f".{asset_id}.uploading"
+    thumb_name = f"{asset_id}.jpg"
+    thumb_path = THUMBNAIL_DIR / thumb_name
+    staged_thumbnail = THUMBNAIL_DIR / f".{asset_id}.uploading.jpg"
     size = 0
     try:
-        with destination.open("wb") as target:
+        with staged_source.open("xb") as target:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_UPLOAD_BYTES:
                     raise HTTPException(status_code=413, detail="Ukuran video melewati batas impor.")
                 target.write(chunk)
+            target.flush()
+            os.fsync(target.fileno())
         if size == 0:
             raise HTTPException(status_code=400, detail="File video kosong.")
 
-        metadata = probe_media(destination)
-        thumb_name = f"{asset_id}.jpg"
-        thumb_path = THUMBNAIL_DIR / thumb_name
-        has_thumbnail = create_thumbnail(destination, thumb_path)
+        metadata = probe_media(staged_source)
+        has_thumbnail = create_thumbnail(staged_source, staged_thumbnail)
+        if not has_thumbnail:
+            staged_thumbnail.unlink(missing_ok=True)
+
+        # Publish validated files atomically before committing their metadata.
+        # If the database write fails, the exception handler removes both files.
+        os.replace(staged_source, destination)
+        if has_thumbnail:
+            os.replace(staged_thumbnail, thumb_path)
+
         timestamp = now_iso()
         with get_connection() as connection:
             connection.execute(
@@ -428,13 +442,26 @@ async def import_media(project_id: str, file: UploadFile = File(...)):
             )
             connection.execute("UPDATE projects SET updated_at=? WHERE id=?", (timestamp, project_id))
             row = connection.execute("SELECT * FROM media_assets WHERE id=?", (asset_id,)).fetchone()
-        return media_row(row)
+            response_payload = media_row(row)
+        return response_payload
     except HTTPException:
+        staged_source.unlink(missing_ok=True)
+        staged_thumbnail.unlink(missing_ok=True)
         destination.unlink(missing_ok=True)
+        thumb_path.unlink(missing_ok=True)
         raise
     except (ValueError, OSError) as error:
+        staged_source.unlink(missing_ok=True)
+        staged_thumbnail.unlink(missing_ok=True)
         destination.unlink(missing_ok=True)
+        thumb_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception:
+        staged_source.unlink(missing_ok=True)
+        staged_thumbnail.unlink(missing_ok=True)
+        destination.unlink(missing_ok=True)
+        thumb_path.unlink(missing_ok=True)
+        raise
     finally:
         await file.close()
 
