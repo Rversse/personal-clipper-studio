@@ -23,6 +23,7 @@
 
 ## Phase 4 — editing and subtitles (partial)
 - [x] Single-clip trim range, split markers, and local edit draft
+- [x] Debounced automatic editor-draft persistence with guarded restore and validation of restored clip sequences
 - [x] 9:16, 16:9, and 1:1 export framing controls
 - [x] Transcript text editing and visual subtitle presets
 - [x] Optional FFmpeg ASS subtitle burn-in with edited transcript text
