@@ -6,6 +6,7 @@ import json
 import os
 import uuid
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -799,9 +800,7 @@ def cancel_export_job(job_id: str) -> None:
             )
             return
     control = rendering.get_control(job_id)
-    if control is not None:
-        control.cancel()
-    else:
+    if control is None:
         with get_connection() as connection:
             connection.execute(
                 """UPDATE export_jobs SET status='cancelled',
@@ -809,6 +808,12 @@ def cancel_export_job(job_id: str) -> None:
                    WHERE id=? AND status='processing'""",
                 (now_iso(), job_id),
             )
+        return
+    control.cancel()
+    # Keep the active state until run_export_job observes RenderCancelled and finalizes cleanup.
+    deadline = time.monotonic() + 10
+    while rendering.get_control(job_id) is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
 
 
 
