@@ -49,11 +49,53 @@ def runtime_diagnostics() -> dict[str, Any]:
         configured = False
         ai_status = "unsupported_provider"
 
+    ffmpeg = _binary_info("ffmpeg")
+    ffprobe = _binary_info("ffprobe")
+    whisper_installed = transcription.is_available()
+    ollama_selected = provider == "ollama"
+    dependencies = [
+        {
+            "id": "ffmpeg",
+            "name": "FFmpeg + FFprobe",
+            "required": True,
+            "available": ffmpeg["available"] and ffprobe["available"],
+            "status": "installed" if ffmpeg["available"] and ffprobe["available"] else "missing",
+            "description": "Diperlukan untuk membaca metadata, membuat thumbnail, analisis audio, dan merender video.",
+            "download_url": "https://www.gyan.dev/ffmpeg/builds/",
+            "download_label": "Download FFmpeg untuk Windows",
+            "install_note": "Install build Windows yang menyertakan ffmpeg.exe dan ffprobe.exe, lalu tambahkan folder bin ke PATH. Restart aplikasi setelah instalasi.",
+        },
+        {
+            "id": "whisper",
+            "name": "Whisper transcription runtime",
+            "required": True,
+            "available": whisper_installed,
+            "status": "installed" if whisper_installed else "missing",
+            "description": "Mesin transkripsi lokal faster-whisper. Pada installer Windows resmi, runtime ini sudah dibundel.",
+            "download_url": "https://github.com/Rversse/personal-clipper-studio",
+            "download_label": "Buka repository aplikasi",
+            "install_note": "Jika runtime tidak terdeteksi pada installer desktop, perbaiki atau install ulang aplikasi. Model bahasa akan diunduh otomatis saat transkripsi pertama.",
+        },
+        {
+            "id": "ollama",
+            "name": "Ollama (opsional)",
+            "required": False,
+            "available": ollama_selected and configured,
+            "status": "selected_configured" if ollama_selected and configured else "optional",
+            "description": "Diperlukan hanya jika memilih provider AI lokal Ollama. Gemini tidak membutuhkan Ollama.",
+            "download_url": "https://ollama.com/download/windows",
+            "download_label": "Download Ollama untuk Windows",
+            "install_note": "Setelah instalasi, jalankan Ollama dan unduh model yang dipilih. Koneksi server dan ketersediaan model belum diuji oleh pemeriksaan ini.",
+        },
+    ]
+
     return {
-        "ffmpeg": _binary_info("ffmpeg"),
-        "ffprobe": _binary_info("ffprobe"),
+        "platform": os.name,
+        "ffmpeg": ffmpeg,
+        "ffprobe": ffprobe,
+        "dependencies": dependencies,
         "transcription": {
-            "installed": transcription.is_available(),
+            "installed": whisper_installed,
             "device": os.environ.get("PCS_WHISPER_DEVICE", "auto"),
             "compute_type": os.environ.get("PCS_WHISPER_COMPUTE_TYPE", "default"),
             "model_downloaded": None,
