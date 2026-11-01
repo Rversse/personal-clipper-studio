@@ -513,3 +513,69 @@ def test_execute_reports_live_progress_while_ffmpeg_runs(monkeypatch):
     updates = []
     rendering._execute(["ffmpeg", "-progress", "pipe:1"], 2.0, updates.append)
     assert updates == [0.1, 0.325, 0.5]
+
+
+
+def test_render_control_kills_attached_process():
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+        def poll(self):
+            return self.returncode
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+        def wait(self, timeout=None):
+            return self.returncode
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+    control = rendering.RenderControl()
+    process = FakeProcess()
+    control.attach(process)
+    control.cancel()
+    assert process.terminated
+    assert control._cancelled.is_set()
+    try:
+        control.check()
+    except rendering.RenderCancelled:
+        pass
+    else:
+        raise AssertionError("Cancelled control must reject continued work")
+
+
+def test_execute_honors_pre_cancelled_control(monkeypatch):
+    control = rendering.RenderControl()
+    control.cancel()
+    monkeypatch.setattr(
+        rendering.subprocess, "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("FFmpeg must not start")),
+    )
+    try:
+        rendering._execute(["ffmpeg"], 10, None, control)
+    except rendering.RenderCancelled:
+        pass
+    else:
+        raise AssertionError("Pre-cancelled render must stop before spawning FFmpeg")
+
+
+def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        monkeypatch.setattr(main_module, "_EXPORT_WORKER_WAKE", type("NoWake", (), {"set": lambda self: None})())
+        monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+        monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 20},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+        cancelled = client.post(f"/api/exports/{job_id}/cancel")
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert client.post(f"/api/exports/{job_id}/cancel").status_code == 409
