@@ -687,6 +687,8 @@ def export_payload(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Export tidak ditemukan.")
     payload = dict(row)
     payload["clip_count"] = len(json.loads(payload["clip_segments"])) if payload.get("clip_segments") else 1
+    settings = json.loads(payload["render_settings"]) if payload.get("render_settings") else {}
+    payload.update(settings)
     payload["download_url"] = (
         f"/api/exports/{job_id}/file" if row["status"] == "completed" else None
     )
@@ -730,6 +732,9 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
             crop_x=float(job_data.get("crop_x") if job_data.get("crop_x") is not None else 0.5),
             crop_y=float(job_data.get("crop_y") if job_data.get("crop_y") is not None else 0.5),
             control=control,
+            quality_profile=json.loads(job_data["render_settings"]).get("quality_profile", "balanced") if job_data.get("render_settings") else "balanced",
+            frame_rate=json.loads(job_data["render_settings"]).get("frame_rate", 30) if job_data.get("render_settings") else 30,
+            normalize_audio=json.loads(job_data["render_settings"]).get("normalize_audio", False) if job_data.get("render_settings") else False,
         )
         control.check()
         with get_connection() as connection:
@@ -835,6 +840,10 @@ async def start_export(
 ):
     if payload.end_seconds <= payload.start_seconds:
         raise HTTPException(status_code=422, detail="Titik akhir harus lebih besar dari titik awal.")
+    preset_ratios = {"youtube_shorts": "9:16", "instagram_reels": "9:16", "square_feed": "1:1", "landscape": "16:9"}
+    expected_ratio = preset_ratios.get(payload.output_preset)
+    if expected_ratio and payload.aspect_ratio != expected_ratio:
+        raise HTTPException(status_code=422, detail="Rasio aspek tidak sesuai dengan preset output yang dipilih.")
     clip_segments = [
         {
             "start": segment.start,
@@ -893,18 +902,24 @@ async def start_export(
     ) if payload.burn_subtitles else None
     subtitle_style_payload = json.dumps(payload.subtitle_style.model_dump()) if payload.burn_subtitles else None
     clip_payload = json.dumps(clip_segments)
+    render_settings_payload = json.dumps({
+        "output_preset": payload.output_preset,
+        "quality_profile": payload.quality_profile,
+        "frame_rate": payload.frame_rate,
+        "normalize_audio": payload.normalize_audio,
+    })
     with get_connection() as connection:
         connection.execute(
             """INSERT INTO export_jobs(
                 id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
-                subtitle_payload,subtitle_preset,subtitle_style,clip_segments,crop_zoom,crop_x,crop_y,created_at,updated_at
-             ) VALUES(?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                subtitle_payload,subtitle_preset,subtitle_style,clip_segments,crop_zoom,crop_x,crop_y,render_settings,created_at,updated_at
+             ) VALUES(?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 job_id, asset_id,
                 min(segment["start"] for segment in clip_segments),
                 max(segment["end"] for segment in clip_segments),
                 payload.aspect_ratio, output_name, subtitle_payload,
-                payload.subtitle_preset, subtitle_style_payload, clip_payload, payload.crop_zoom, payload.crop_x, payload.crop_y, timestamp, timestamp,
+                payload.subtitle_preset, subtitle_style_payload, clip_payload, payload.crop_zoom, payload.crop_x, payload.crop_y, render_settings_payload, timestamp, timestamp,
             ),
         )
     _EXPORT_WORKER_WAKE.set()
