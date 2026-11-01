@@ -8,7 +8,7 @@ dependencies = [
   "uvicorn[standard]>=0.32,<1.0",
   "pydantic-settings>=2.6,<3.0",
   "python-multipart>=0.0.12,<1.0",
-  "keyring[win32]>=25.5,<27"
+  "keyring>=25.5,<27"
 ]
 
 [project.optional-dependencies]
