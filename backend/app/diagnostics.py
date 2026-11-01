@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import ipaddress
+import json
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter
 
@@ -33,8 +38,64 @@ def _binary_info(name: str) -> dict[str, Any]:
         return {"available": False, "version": None}
 
 
+def _ollama_status(endpoint: str, model: str) -> dict[str, Any]:
+    """Check only a loopback Ollama instance; never send diagnostics to remote hosts."""
+    parsed = urlsplit(endpoint)
+    host = parsed.hostname or ""
+    try:
+        loopback = host.lower() == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if (
+        parsed.scheme != "http"
+        or not loopback
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return {
+            "connection": "not_tested_unsafe_endpoint",
+            "model_available": None,
+            "models": [],
+        }
+
+    url = endpoint.rstrip("/") + "/api/tags"
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            payload = json.loads(response.read(1024 * 1024 + 1).decode("utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+            raise ValueError("Invalid Ollama tags response")
+        names = [
+            str(item.get("name") or item.get("model") or "")
+            for item in payload["models"]
+            if isinstance(item, dict) and (item.get("name") or item.get("model"))
+        ]
+        normalized_model = model.strip()
+        available = normalized_model in names or (
+            ":" not in normalized_model and f"{normalized_model}:latest" in names
+        )
+        return {
+            "connection": "connected",
+            "model_available": available,
+            "models": names[:50],
+        }
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        return {
+            "connection": "unreachable",
+            "model_available": False,
+            "models": [],
+        }
+
+
 def runtime_diagnostics() -> dict[str, Any]:
     provider = os.environ.get("PCS_AI_PROVIDER", "gemini").strip().lower()
+    ollama = {
+        "connection": "not_selected",
+        "model_available": None,
+        "models": [],
+    }
     if provider == "gemini":
         model = os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
         configured = bool(os.environ.get("PCS_GEMINI_API_KEY", "").strip() and model)
@@ -43,7 +104,16 @@ def runtime_diagnostics() -> dict[str, Any]:
         model = os.environ.get("PCS_OLLAMA_MODEL", "qwen3:8b").strip()
         endpoint = os.environ.get("PCS_OLLAMA_URL", "http://127.0.0.1:11434").strip()
         configured = bool(model and endpoint)
-        ai_status = "configured_not_connection_tested" if configured else "invalid_configuration"
+        ollama = _ollama_status(endpoint, model) if configured else ollama
+        ai_status = (
+            "connected_model_available"
+            if ollama["connection"] == "connected" and ollama["model_available"]
+            else "connected_model_missing"
+            if ollama["connection"] == "connected"
+            else "configured_not_connected"
+            if configured
+            else "invalid_configuration"
+        )
     else:
         model = ""
         configured = False
@@ -52,7 +122,6 @@ def runtime_diagnostics() -> dict[str, Any]:
     ffmpeg = _binary_info("ffmpeg")
     ffprobe = _binary_info("ffprobe")
     whisper_installed = transcription.is_available()
-    ollama_selected = provider == "ollama"
     ollama_installed = shutil.which("ollama") is not None
     dependencies = [
         {
@@ -83,10 +152,10 @@ def runtime_diagnostics() -> dict[str, Any]:
             "required": False,
             "available": ollama_installed,
             "status": "installed" if ollama_installed else "missing_optional",
-            "description": "Opsional untuk provider AI lokal. Pemeriksaan hanya mendeteksi program Ollama CLI; status server dan model belum diuji. Gemini tidak membutuhkan Ollama.",
+            "description": "Opsional untuk provider AI lokal. Pemeriksaan mendeteksi CLI; koneksi server dan model diperiksa terpisah hanya saat Ollama dipilih.",
             "download_url": "https://ollama.com/download/windows",
             "download_label": "Download Ollama untuk Windows",
-            "install_note": "Setelah instalasi, jalankan Ollama dan unduh model yang dipilih. Koneksi server dan ketersediaan model belum diuji oleh pemeriksaan ini.",
+            "install_note": "Setelah instalasi, jalankan Ollama dan unduh model yang dipilih. Tekan Check again untuk memeriksa server dan model.",
         },
     ]
 
@@ -106,11 +175,14 @@ def runtime_diagnostics() -> dict[str, Any]:
             "model": model or None,
             "configured": configured,
             "status": ai_status,
+            "ollama_connection": ollama["connection"],
+            "ollama_model_available": ollama["model_available"],
+            "ollama_models": ollama["models"],
         },
     }
 
 
 @router.get("/api/diagnostics")
 async def get_runtime_diagnostics() -> dict[str, Any]:
-    """Report local runtime readiness without exposing secrets or making provider calls."""
+    """Report local runtime readiness without exposing secrets or contacting remote providers."""
     return runtime_diagnostics()
