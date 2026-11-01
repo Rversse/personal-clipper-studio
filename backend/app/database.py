@@ -117,6 +117,7 @@ def ensure_storage() -> None:
                 crop_zoom REAL NOT NULL DEFAULT 1.0,
                 crop_x REAL NOT NULL DEFAULT 0.5,
                 crop_y REAL NOT NULL DEFAULT 0.5,
+                render_settings TEXT,
                 encoder TEXT,
                 progress REAL NOT NULL DEFAULT 0,
                 error TEXT,
@@ -142,6 +143,8 @@ def ensure_storage() -> None:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_x REAL NOT NULL DEFAULT 0.5")
         if "crop_y" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_y REAL NOT NULL DEFAULT 0.5")
+        if "render_settings" not in export_columns:
+            connection.execute("ALTER TABLE export_jobs ADD COLUMN render_settings TEXT")
 
 
 @contextmanager
