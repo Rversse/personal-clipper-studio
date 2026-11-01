@@ -31,3 +31,5 @@
 @media(max-width:600px){.subtitle-style-controls{grid-template-columns:1fr}}
 
 .export-cancel{margin-top:8px;height:30px;padding:0 10px;border-color:#765044;color:#e4a18d;background:#251c1b}.export-cancel:hover{border-color:#d28d75;color:#ffd0bd}
+
+.sequence-visual button.selected{border-color:#c4e97a;background:#303b27;box-shadow:inset 0 0 0 1px #91b66b}.sequence-visual button small{font-size:8px;color:#c4e97a}
