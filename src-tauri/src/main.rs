@@ -111,12 +111,14 @@ fn main() {
                 command.creation_flags(0x08000000);
 
                 let mut child = command.spawn()?;
-                if let Some(stdin) = child.stdin.as_mut() {
-                    writeln!(stdin, "session:{session_token}")?;
-                    stdin.flush()?;
-                } else {
-                    let _ = child.kill();
-                    return Err(std::io::Error::other("Backend session channel is unavailable.").into());
+                let handshake = match child.stdin.as_mut() {
+                    Some(stdin) => writeln!(stdin, "session:{}", session_token)
+                        .and_then(|_| stdin.flush()),
+                    None => Err(std::io::Error::other("Backend session channel is unavailable.")),
+                };
+                if let Err(error) = handshake {
+                    shutdown_backend(&mut child);
+                    return Err(error.into());
                 }
                 app.manage(BackendProcess(Mutex::new(Some(child))));
             }
