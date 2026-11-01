@@ -442,7 +442,8 @@ async def import_media(project_id: str, file: UploadFile = File(...)):
             )
             connection.execute("UPDATE projects SET updated_at=? WHERE id=?", (timestamp, project_id))
             row = connection.execute("SELECT * FROM media_assets WHERE id=?", (asset_id,)).fetchone()
-        return media_row(row)
+            response_payload = media_row(row)
+        return response_payload
     except HTTPException:
         staged_source.unlink(missing_ok=True)
         staged_thumbnail.unlink(missing_ok=True)
