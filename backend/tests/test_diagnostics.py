@@ -59,6 +59,9 @@ def test_ollama_diagnostics_does_not_claim_server_is_connected(monkeypatch):
     assert result["ai"]["configured"] is True
     assert result["ai"]["status"] == "configured_not_connection_tested"
     assert "127.0.0.1" not in repr(result)
+    ollama = next(item for item in result["dependencies"] if item["id"] == "ollama")
+    assert "server" in ollama["description"].lower()
+    assert ollama["required"] is False
 
 
 def test_diagnostics_rejects_unknown_ai_provider(monkeypatch):
