@@ -1370,3 +1370,27 @@ def test_recovery_requeues_mp4_with_valid_signature_but_invalid_metadata(tmp_pat
     assert job["progress"] == 0
     assert job["error"] is None
     assert not destination.exists()
+
+
+def test_render_clip_does_not_publish_output_when_ffprobe_validation_fails(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    destination.write_bytes(b"previous-valid-output")
+    monkeypatch.setattr(rendering.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda *_args: "libx264")
+
+    def fake_execute(command, duration, progress, control=None):
+        Path(command[-1]).write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(rendering, "_execute", fake_execute)
+
+    try:
+        rendering.render_clip(source, destination, 0, 10, "16:9")
+    except rendering.RenderError as error:
+        assert "FFprobe" in str(error)
+    else:
+        raise AssertionError("Missing FFprobe must prevent publishing an unverified output")
+
+    assert destination.read_bytes() == b"previous-valid-output"
+    assert not (tmp_path / "final.partial.mp4").exists()
