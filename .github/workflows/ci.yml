@@ -53,13 +53,13 @@ jobs:
       - name: Install pinned uv package manager
         run: python -m pip install "uv==0.13.6"
       - name: Install backend dependencies from the committed lockfile
-        run: uv sync --project backend --extra dev --extra transcription --locked
+        run: uv sync --project backend --extra dev --extra transcription --extra build --locked
       - name: Upgrade vulnerable Python build tooling
         run: uv pip install --python backend/.venv/bin/python --upgrade "setuptools>=84.1.0"
       - name: Audit installed Python dependencies for known vulnerabilities
         run: |
           uv pip install --python backend/.venv/bin/python "pip-audit==2.10.1"
-          uv run --project backend --extra dev --extra transcription --no-sync pip-audit --local
+          uv run --project backend --extra dev --extra transcription --extra build --no-sync pip-audit --local
       - name: Run backend tests
         run: uv run --project . --extra dev --no-sync pytest -q
         working-directory: backend
