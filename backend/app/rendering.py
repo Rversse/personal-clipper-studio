@@ -421,6 +421,8 @@ def render_clip(
         temporary_output.unlink(missing_ok=True)
         if subtitle_file is not None:
             subtitle_file.unlink(missing_ok=True)
+        if control:
+            control.check()
 
 
 
