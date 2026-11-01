@@ -701,7 +701,10 @@ async def start_transcription(
         ).fetchone()
         if media is None:
             raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
-        source_path = MEDIA_DIR / media["stored_name"]
+        extension = Path(str(media["stored_name"])).suffix.lower()
+        if extension not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=500, detail="Referensi media tersimpan tidak valid.")
+        source_path = _managed_file_path(MEDIA_DIR, media["stored_name"], f"{asset_id}{extension}")
         if not source_path.is_file():
             raise HTTPException(status_code=404, detail="File media tidak ditemukan di penyimpanan.")
         connection.execute(
@@ -950,7 +953,10 @@ def run_discovery_job(job_id: str) -> None:
         audio_features = None
         if media is not None:
             try:
-                source_path = MEDIA_DIR / media["stored_name"]
+                extension = Path(str(media["stored_name"])).suffix.lower()
+                if extension not in ALLOWED_EXTENSIONS:
+                    raise ValueError("Referensi media tersimpan tidak valid.")
+                source_path = _managed_file_path(MEDIA_DIR, media["stored_name"], f"{media['id']}{extension}")
                 audio_features = audio_analysis.analyze_audio(
                     source_path, duration=media["duration"]
                 )
@@ -1284,7 +1290,7 @@ def _export_worker_loop() -> None:
     while not _EXPORT_WORKER_STOP.is_set():
         with get_connection() as connection:
             job = connection.execute(
-                """SELECT e.id, e.output_name, m.stored_name
+                """SELECT e.id, e.output_name, m.id AS media_id, m.stored_name
                    FROM export_jobs e JOIN media_assets m ON m.id=e.media_id
                    WHERE e.status='queued' ORDER BY e.created_at ASC LIMIT 1"""
             ).fetchone()
@@ -1292,7 +1298,22 @@ def _export_worker_loop() -> None:
             _EXPORT_WORKER_WAKE.wait(timeout=1.0)
             _EXPORT_WORKER_WAKE.clear()
             continue
-        run_export_job(job["id"], str(MEDIA_DIR / job["stored_name"]), str(EXPORT_DIR / job["output_name"]))
+        try:
+            extension = Path(str(job["stored_name"])).suffix.lower()
+            if extension not in ALLOWED_EXTENSIONS:
+                raise HTTPException(status_code=500, detail="Referensi media tersimpan tidak valid.")
+            source_path = _managed_file_path(MEDIA_DIR, job["stored_name"], f"{job['media_id']}{extension}")
+            destination_path = _managed_file_path(EXPORT_DIR, job["output_name"], f"clip-{job['id']}.mp4")
+            if not source_path.is_file():
+                raise HTTPException(status_code=404, detail="File video sumber tidak ditemukan.")
+        except HTTPException as error:
+            with get_connection() as connection:
+                connection.execute(
+                    "UPDATE export_jobs SET status='failed', error=?, updated_at=? WHERE id=? AND status='queued'",
+                    (error.detail, now_iso(), job["id"]),
+                )
+            continue
+        run_export_job(job["id"], str(source_path), str(destination_path))
 
 
 def start_export_worker() -> None:
@@ -1453,7 +1474,10 @@ async def start_export(
         segment.end > float(media["duration"]) + 0.05 for segment in payload.subtitle_segments
     ):
         raise HTTPException(status_code=422, detail="Timestamp subtitle melewati durasi video sumber.")
-    source_path = MEDIA_DIR / media["stored_name"]
+    media_extension = Path(str(media["stored_name"])).suffix.lower()
+    if media_extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=500, detail="Referensi media tersimpan tidak valid.")
+    source_path = _managed_file_path(MEDIA_DIR, media["stored_name"], f"{asset_id}{media_extension}")
     if not source_path.is_file():
         raise HTTPException(status_code=404, detail="File video sumber tidak ditemukan.")
     job_id = str(uuid.uuid4())
