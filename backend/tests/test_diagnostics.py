@@ -165,3 +165,17 @@ def test_diagnostics_rejects_unknown_ai_provider(monkeypatch):
     assert result["ai"]["configured"] is False
     assert result["ai"]["status"] == "unsupported_provider"
     assert result["ai"]["model"] is None
+
+
+
+def test_ollama_diagnostics_rejects_malformed_endpoint_port(monkeypatch):
+    monkeypatch.setenv("PCS_AI_PROVIDER", "ollama")
+    monkeypatch.setenv("PCS_OLLAMA_MODEL", "qwen3:8b")
+    monkeypatch.setenv("PCS_OLLAMA_URL", "http://127.0.0.1:not-a-port")
+    _mock_base(monkeypatch)
+
+    state = _mock_ollama_http(monkeypatch)
+    result = diagnostics.runtime_diagnostics()
+
+    assert "host" not in state
+    assert result["ai"]["ollama_connection"] == "not_tested_unsafe_endpoint"
