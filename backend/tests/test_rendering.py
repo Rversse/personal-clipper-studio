@@ -128,7 +128,7 @@ def test_nvenc_runtime_failure_retries_with_cpu_and_replaces_atomically(tmp_path
     monkeypatch.setattr(rendering, "available_encoder", lambda _: "h264_nvenc")
     attempts = []
 
-    def fake_execute(command, duration, progress):
+    def fake_execute(command, duration, progress, control=None):
         attempts.append(command)
         if "h264_nvenc" in command:
             raise rendering.RenderError("NVENC device unavailable")
@@ -294,19 +294,15 @@ def test_render_sequence_renders_in_order_and_cleans_intermediates(tmp_path, mon
             progress(1.0)
         return {"encoder": "libx264", "output": str(output_path)}
 
-    def fake_concat(command, **kwargs):
+    def fake_concat(command, duration, progress, control=None):
         assert command[command.index("-f") + 1] == "concat"
         list_path = Path(command[command.index("-i") + 1])
         entries = list_path.read_text(encoding="utf-8").splitlines()
         assert len(entries) == 2
         Path(command[-1]).write_bytes(b"y" * 4096)
-        class Result:
-            returncode = 0
-            stderr = ""
-        return Result()
 
     monkeypatch.setattr(rendering, "render_clip", fake_render)
-    monkeypatch.setattr(rendering.subprocess, "run", fake_concat)
+    monkeypatch.setattr(rendering, "_execute", fake_concat)
     progress_values = []
     subtitle_style = {"font_size": 68, "vertical_position": 10, "outline_width": 3.5, "background_opacity": 35}
     result = rendering.render_sequence(
@@ -503,6 +499,9 @@ def test_execute_reports_live_progress_while_ffmpeg_runs(monkeypatch):
             )
             self.returncode = 0
 
+        def poll(self):
+            return self.returncode
+
         def wait(self, timeout=None):
             return self.returncode
 
@@ -567,6 +566,8 @@ def test_execute_honors_pre_cancelled_control(monkeypatch):
 
 def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "_EXPORT_WORKER_WAKE", type("NoWake", (), {"set": lambda self: None, "clear": lambda self: None, "wait": lambda self, timeout=None: False})())
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
     monkeypatch.setattr(main_module, "_EXPORT_WORKER_WAKE", type("NoWake", (), {"set": lambda self: None})())
     monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
     monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
