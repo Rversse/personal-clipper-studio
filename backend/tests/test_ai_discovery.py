@@ -60,13 +60,7 @@ def test_queued_discovery_can_be_cancelled(tmp_path, monkeypatch):
     )
     with TestClient(app) as client:
         media_id, transcript_id = seed_completed_transcript()
-        created = client.post(
-            f"/api/media/{media_id}/discovery",
-            json={"transcription_id": transcript_id},
-        )
-        assert created.status_code == 202
-        # The TestClient executes background tasks before returning, so create a
-        # queued row directly to exercise the cancellation API deterministically.
+        # Insert a queued row directly to exercise cancellation deterministically.
         job_id = str(uuid.uuid4())
         timestamp = main_module.now_iso()
         with database.get_connection() as connection:
