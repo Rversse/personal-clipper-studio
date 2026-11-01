@@ -73,8 +73,8 @@ def runtime_diagnostics() -> dict[str, Any]:
             "available": whisper_installed,
             "status": "installed" if whisper_installed else "missing",
             "description": "Mesin transkripsi lokal faster-whisper. Pada installer Windows resmi, runtime ini sudah dibundel.",
-            "download_url": "https://github.com/Rversse/personal-clipper-studio",
-            "download_label": "Buka repository aplikasi",
+            "download_url": "https://github.com/Rversse/personal-clipper-studio/releases",
+            "download_label": "Download / reinstall aplikasi",
             "install_note": "Jika runtime tidak terdeteksi pada installer desktop, perbaiki atau install ulang aplikasi. Model bahasa akan diunduh otomatis saat transkripsi pertama.",
         },
         {
