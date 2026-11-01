@@ -118,7 +118,7 @@ def refine_candidate_boundaries(
 ) -> dict[str, Any] | None:
     """Snap an AI proposal to sentence- and pause-aware Whisper segment boundaries.
 
-    The proposal remains the semantic anchor. Starts may move up to 8 seconds
+    The proposal remains the semantic anchor. Starts may move up to 10 seconds
     earlier (or 2 seconds later), while endings may move up to 10 seconds later
     (or 2 seconds earlier), subject to the requested duration window.
     """
@@ -140,7 +140,7 @@ def refine_candidate_boundaries(
     starts = []
     for index, segment in enumerate(ordered):
         boundary = float(segment["start"])
-        if target_start - 8.0 <= boundary <= target_start + 2.0:
+        if target_start - 10.0 <= boundary <= target_start + 2.0:
             quality, reason = _opening_signal(ordered, index)
             starts.append((boundary, quality, reason, index))
 
