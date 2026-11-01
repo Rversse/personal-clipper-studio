@@ -567,6 +567,9 @@ def test_execute_honors_pre_cancelled_control(monkeypatch):
 
 def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "_EXPORT_WORKER_WAKE", type("NoWake", (), {"set": lambda self: None})())
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
     with TestClient(app) as client:
         media_id = seed_media()
         monkeypatch.setattr(main_module, "_EXPORT_WORKER_WAKE", type("NoWake", (), {"set": lambda self: None})())
