@@ -1109,3 +1109,15 @@ def test_auto_subtitles_use_word_events_when_text_matches_segment(tmp_path, monk
             {"start": 2.0, "end": 2.4, "text": "Satu,"},
             {"start": 2.5, "end": 3.0, "text": "dua!"},
         ]
+
+
+def test_escape_filter_path_handles_windows_drive_and_special_characters(monkeypatch, tmp_path):
+    class WindowsResolvedPath:
+        def __str__(self):
+            return r"C:\\Users\\Editor\\A, [take]'s subtitle.ass"
+
+    monkeypatch.setattr(Path, "resolve", lambda _self: WindowsResolvedPath())
+
+    escaped = rendering._escape_filter_path(tmp_path / "ignored.ass")
+
+    assert escaped == r"C\\:/Users/Editor/A\\, \\[take\\]\\'s subtitle.ass"
