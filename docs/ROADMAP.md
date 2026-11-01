@@ -61,6 +61,7 @@
 - [ ] Two-pass loudness analysis and per-project export defaults
 
 ## Phase 6 — hardening
+- [x] Local runtime diagnostics API for FFmpeg/FFprobe, Whisper availability, and AI provider configuration without exposing credentials or claiming an untested provider connection
 - [ ] Error recovery and cancellation
 - [x] Windows NSIS/MSI CI packaging with a PyInstaller-bundled FastAPI service, packaged-runtime health/SQLite smoke test, and silent installer install/launch/API/SQLite/uninstall validation on a hosted Windows runner
 - [x] Tauri-managed Windows backend startup/shutdown, loopback binding, port-collision guard, and persistent backend log
