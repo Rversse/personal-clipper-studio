@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import queue
@@ -392,6 +393,49 @@ def _execute(
             reader.join(timeout=2)
 
 
+def validate_mp4_output(path: Path, expected_duration: float | None = None) -> dict:
+    """Verify that an FFmpeg output is a readable MP4 with a real video stream."""
+    if not path.is_file() or path.stat().st_size < 1024:
+        raise RenderError("Hasil render tidak valid atau terlalu kecil.")
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise RenderError("FFprobe tidak ditemukan; hasil render tidak dapat diverifikasi.")
+    try:
+        probe = subprocess.run(
+            [
+                ffprobe, "-v", "error", "-show_entries",
+                "format=format_name,duration:stream=codec_type,width,height",
+                "-of", "json", str(path),
+            ],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RenderError(f"Gagal memverifikasi hasil MP4 dengan FFprobe: {error}") from error
+    if probe.returncode != 0:
+        detail = (probe.stderr or "FFprobe menolak file output.").strip()
+        raise RenderError(f"Hasil render bukan media yang valid: {detail[:500]}")
+    try:
+        metadata = json.loads(probe.stdout)
+        container = str(metadata.get("format", {}).get("format_name", "")).lower().split(",")
+        duration = float(metadata.get("format", {}).get("duration", 0))
+        video = next(
+            stream for stream in metadata.get("streams", [])
+            if stream.get("codec_type") == "video"
+        )
+        width, height = int(video.get("width", 0)), int(video.get("height", 0))
+    except (ValueError, TypeError, KeyError, StopIteration, json.JSONDecodeError) as error:
+        raise RenderError("Metadata hasil render tidak lengkap atau tidak dapat dibaca.") from error
+    if not any(name in {"mp4", "mov"} for name in container):
+        raise RenderError("Format container hasil render bukan MP4.")
+    if not math.isfinite(duration) or duration <= 0 or width <= 0 or height <= 0:
+        raise RenderError("Hasil render tidak memiliki durasi atau stream video yang valid.")
+    if expected_duration is not None:
+        tolerance = max(0.5, expected_duration * 0.03)
+        if not math.isfinite(expected_duration) or expected_duration <= 0 or abs(duration - expected_duration) > tolerance:
+            raise RenderError("Durasi hasil render tidak sesuai dengan durasi klip yang diminta.")
+    return {"duration": duration, "width": width, "height": height}
+
+
 def render_clip(
     source: Path,
     destination: Path,
@@ -454,8 +498,7 @@ def render_clip(
                 quality_profile, frame_rate, normalize_audio,
             )
             _execute(cpu_command, duration, progress, control)
-        if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
-            raise RenderError("FFmpeg selesai tetapi file hasil tidak valid atau terlalu kecil.")
+        validate_mp4_output(temporary_output, expected_duration=duration)
         os.replace(temporary_output, destination)
         if progress:
             progress(1.0)
@@ -581,8 +624,7 @@ def render_sequence(
             if "Rendering melewati batas waktu" in str(error):
                 raise RenderError("Penggabungan klip melewati batas waktu 6 jam.") from error
             raise RenderError("FFmpeg concat gagal: {}".format(error)) from error
-        if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
-            raise RenderError("Hasil gabungan tidak valid atau terlalu kecil.")
+        validate_mp4_output(temporary_output, expected_duration=total_duration)
         if control:
             control.check()
         os.replace(temporary_output, destination)

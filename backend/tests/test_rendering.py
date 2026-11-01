@@ -93,6 +93,7 @@ def test_recovery_keeps_atomically_committed_mp4_and_marks_job_completed(tmp_pat
     destination = database.EXPORT_DIR / output_name
     _seed_interrupted_export(job_id, output_name)
     destination.write_bytes(bytes([0, 0, 0, 24]) + b"ftypisom" + b"x" * 1200)
+    monkeypatch.setattr(main_module.rendering, "validate_mp4_output", lambda _path, expected_duration=None: {"duration": 30.0, "width": 1080, "height": 1920})
 
     main_module.recover_interrupted_exports()
 
@@ -252,6 +253,7 @@ def test_nvenc_runtime_failure_retries_with_cpu_and_replaces_atomically(tmp_path
         Path(command[-1]).write_bytes(b"x" * 2048)
 
     monkeypatch.setattr(rendering, "_execute", fake_execute)
+    monkeypatch.setattr(rendering, "validate_mp4_output", lambda _path, expected_duration=None: {"duration": expected_duration, "width": 1920, "height": 1080})
     result = rendering.render_clip(source, destination, 0, 20, "16:9")
     assert result["encoder"] == "libx264"
     assert len(attempts) == 2
@@ -317,6 +319,7 @@ def test_render_subtitle_requires_libass_and_cleans_temp_file(tmp_path, monkeypa
         Path(command[-1]).write_bytes(b"x" * 2048)
 
     monkeypatch.setattr(rendering, "_execute", fake_execute)
+    monkeypatch.setattr(rendering, "validate_mp4_output", lambda _path, expected_duration=None: {"duration": expected_duration, "width": 1080, "height": 1920})
     rendering.render_clip(
         source, destination, 0, 10, "9:16",
         subtitle_segments=[{"start": 1, "end": 3, "text": "Caption"}],
@@ -420,6 +423,7 @@ def test_render_sequence_renders_in_order_and_cleans_intermediates(tmp_path, mon
 
     monkeypatch.setattr(rendering, "render_clip", fake_render)
     monkeypatch.setattr(rendering, "_execute", fake_concat)
+    monkeypatch.setattr(rendering, "validate_mp4_output", lambda _path, expected_duration=None: {"duration": expected_duration, "width": 1080, "height": 1920})
     progress_values = []
     subtitle_style = {"font_size": 68, "vertical_position": 10, "outline_width": 3.5, "background_opacity": 35}
     result = rendering.render_sequence(
@@ -910,6 +914,7 @@ def test_render_sequence_applies_distinct_audio_gain_per_clip(tmp_path, monkeypa
 
     monkeypatch.setattr(rendering, "render_clip", fake_render)
     monkeypatch.setattr(rendering, "_execute", fake_concat)
+    monkeypatch.setattr(rendering, "validate_mp4_output", lambda _path, expected_duration=None: {"duration": expected_duration, "width": 1080, "height": 1920})
     rendering.render_sequence(
         source, destination,
         [
@@ -1063,6 +1068,7 @@ def test_render_sequence_propagates_quality_frame_rate_and_audio_normalization(t
 
     monkeypatch.setattr(rendering, "render_clip", fake_render)
     monkeypatch.setattr(rendering, "_execute", fake_concat)
+    monkeypatch.setattr(rendering, "validate_mp4_output", lambda _path, expected_duration=None: {"duration": expected_duration, "width": 1080, "height": 1920})
     rendering.render_sequence(
         source, destination, [{"start": 0, "end": 5}], "9:16",
         quality_profile="high", frame_rate=60, normalize_audio=True,
@@ -1298,3 +1304,93 @@ def test_escape_filter_path_handles_windows_drive_and_special_characters(monkeyp
     escaped = rendering._escape_filter_path(tmp_path / "ignored.ass")
 
     assert escaped == r"C\:/Users/Editor/A\, \[take\]\'s subtitle.ass"
+
+
+def test_mp4_validator_rejects_file_without_video_stream(tmp_path, monkeypatch):
+    output = tmp_path / "broken.mp4"
+    output.write_bytes(b"x" * 2048)
+    monkeypatch.setattr(rendering.shutil, "which", lambda name: "/usr/bin/ffprobe" if name == "ffprobe" else None)
+    monkeypatch.setattr(
+        rendering.subprocess, "run",
+        lambda *args, **kwargs: rendering.subprocess.CompletedProcess(
+            args[0], 0, stdout=json.dumps({
+                "format": {"format_name": "mov,mp4,m4a", "duration": "10.0"},
+                "streams": [{"codec_type": "audio"}],
+            }), stderr="",
+        ),
+    )
+    try:
+        rendering.validate_mp4_output(output, expected_duration=10)
+    except rendering.RenderError as error:
+        assert "video" in str(error).lower() or "metadata" in str(error).lower()
+    else:
+        raise AssertionError("An MP4 without a video stream must be rejected")
+
+
+def test_mp4_validator_rejects_duration_mismatch(tmp_path, monkeypatch):
+    output = tmp_path / "truncated.mp4"
+    output.write_bytes(b"x" * 2048)
+    monkeypatch.setattr(rendering.shutil, "which", lambda name: "/usr/bin/ffprobe" if name == "ffprobe" else None)
+    monkeypatch.setattr(
+        rendering.subprocess, "run",
+        lambda *args, **kwargs: rendering.subprocess.CompletedProcess(
+            args[0], 0, stdout=json.dumps({
+                "format": {"format_name": "mov,mp4,m4a", "duration": "2.0"},
+                "streams": [{"codec_type": "video", "width": 1080, "height": 1920}],
+            }), stderr="",
+        ),
+    )
+    try:
+        rendering.validate_mp4_output(output, expected_duration=30)
+    except rendering.RenderError as error:
+        assert "Durasi" in str(error)
+    else:
+        raise AssertionError("A truncated output must fail duration validation")
+
+
+def test_recovery_requeues_mp4_with_valid_signature_but_invalid_metadata(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    database.ensure_storage()
+    seed_media()
+    job_id = str(uuid.uuid4())
+    output_name = f"clip-{job_id}.mp4"
+    destination = database.EXPORT_DIR / output_name
+    _seed_interrupted_export(job_id, output_name)
+    destination.write_bytes(bytes([0, 0, 0, 24]) + b"ftypisom" + b"x" * 1200)
+    monkeypatch.setattr(
+        main_module.rendering, "validate_mp4_output",
+        lambda _path, expected_duration=None: (_ for _ in ()).throw(rendering.RenderError("invalid MP4")),
+    )
+
+    main_module.recover_interrupted_exports()
+
+    with database.get_connection() as connection:
+        job = connection.execute("SELECT status,progress,error FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+    assert job["status"] == "queued"
+    assert job["progress"] == 0
+    assert job["error"] is None
+    assert not destination.exists()
+
+
+def test_render_clip_does_not_publish_output_when_ffprobe_validation_fails(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    destination.write_bytes(b"previous-valid-output")
+    monkeypatch.setattr(rendering.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda *_args: "libx264")
+
+    def fake_execute(command, duration, progress, control=None):
+        Path(command[-1]).write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(rendering, "_execute", fake_execute)
+
+    try:
+        rendering.render_clip(source, destination, 0, 10, "16:9")
+    except rendering.RenderError as error:
+        assert "FFprobe" in str(error)
+    else:
+        raise AssertionError("Missing FFprobe must prevent publishing an unverified output")
+
+    assert destination.read_bytes() == b"previous-valid-output"
+    assert not (tmp_path / "final.partial.mp4").exists()
