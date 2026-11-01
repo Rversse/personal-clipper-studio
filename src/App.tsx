@@ -404,7 +404,7 @@ function App() {
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
-        const savedOutputPreset = ["youtube_shorts","instagram_reels","square_feed","landscape","custom"].includes(parsed.outputPreset ?? "")
+        const savedOutputPreset = ["youtube_shorts","instagram_reels","facebook_reels","square_feed","landscape","custom"].includes(parsed.outputPreset ?? "")
           ? parsed.outputPreset!
           : parsed.ratio === "1:1" ? "square_feed" : parsed.ratio === "16:9" ? "landscape" : "youtube_shorts";
         setOutputPreset(savedOutputPreset);
@@ -955,12 +955,13 @@ function App() {
                     <label>Platform preset<select value={outputPreset} onChange={event=>{
                       const preset=event.target.value;
                       setOutputPreset(preset);
-                      if(preset==="youtube_shorts"||preset==="instagram_reels")setAspectRatio("9:16");
+                      if(preset==="youtube_shorts"||preset==="instagram_reels"||preset==="facebook_reels")setAspectRatio("9:16");
                       else if(preset==="square_feed")setAspectRatio("1:1");
                       else if(preset==="landscape")setAspectRatio("16:9");
                     }}>
                       <option value="youtube_shorts">YouTube Shorts · 9:16</option>
                       <option value="instagram_reels">Instagram Reels · 9:16</option>
+                      <option value="facebook_reels">Facebook Reels · 9:16</option>
                       <option value="square_feed">Square feed · 1:1</option>
                       <option value="landscape">Landscape · 16:9</option>
                       <option value="custom">Custom</option>
