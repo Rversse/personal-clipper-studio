@@ -840,7 +840,7 @@ async def start_export(
 ):
     if payload.end_seconds <= payload.start_seconds:
         raise HTTPException(status_code=422, detail="Titik akhir harus lebih besar dari titik awal.")
-    preset_ratios = {"youtube_shorts": "9:16", "instagram_reels": "9:16", "square_feed": "1:1", "landscape": "16:9"}
+    preset_ratios = {"youtube_shorts": "9:16", "instagram_reels": "9:16", "facebook_reels": "9:16", "square_feed": "1:1", "landscape": "16:9"}
     expected_ratio = preset_ratios.get(payload.output_preset)
     if expected_ratio and payload.aspect_ratio != expected_ratio:
         raise HTTPException(status_code=422, detail="Rasio aspek tidak sesuai dengan preset output yang dipilih.")
