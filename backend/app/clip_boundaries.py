@@ -129,6 +129,11 @@ def refine_candidate_boundaries(
         return None
     if target_end <= target_start or min_duration <= 0 or max_duration < min_duration:
         return None
+    proposed_duration = target_end - target_start
+    # Boundary refinement may recover a small amount of missing setup/payoff,
+    # but must not stretch an invalid proposal into the requested duration band.
+    if proposed_duration < min_duration - 5 or proposed_duration > max_duration + 5:
+        return None
 
     ordered = sorted(segments, key=lambda item: float(item["start"]))
     if any(
