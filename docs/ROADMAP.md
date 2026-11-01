@@ -40,7 +40,8 @@
 - [x] NVENC attempt with automatic libx264 CPU fallback on encoder failure
 - [x] Persistent export job records, status endpoint, history, and completed-file download
 - [x] Live FFmpeg progress streamed into persistent export job status
-- [ ] True multi-item batch scheduling, cancellation, and crash recovery
+- [x] Persistent single-worker queue for multiple export jobs, serial execution, queued/active cancellation, subprocess termination, and temporary-file cleanup
+- [ ] Automatic resumption of interrupted active renders after a crash
 - [x] Burned-in subtitle rendering with Clean, Bold, and Highlight presets
 - [ ] Advanced Shorts / Reels export presets
 
