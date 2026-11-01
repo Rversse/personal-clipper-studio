@@ -25,7 +25,7 @@ from .schemas import (
 )
 from . import ai_discovery, transcription, rendering, audio_analysis
 from .diagnostics import router as diagnostics_router
-from .security import ALLOWED_UI_ORIGINS
+from .security import ALLOWED_API_HOSTS, ALLOWED_UI_ORIGINS
 from .ai_settings import router as ai_settings_router
 
 _EXPORT_WORKER_LOCK = threading.Lock()
@@ -175,11 +175,21 @@ async def enforce_trusted_browser_origin(request, call_next):
     must originate from the desktop UI or the explicitly allowed development UI.
     """
     origin = request.headers.get("origin")
-    if origin is not None and origin not in ALLOWED_UI_ORIGINS:
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "Origin browser tidak diizinkan."},
-        )
+    if origin is not None:
+        if origin not in ALLOWED_UI_ORIGINS:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Origin browser tidak diizinkan."},
+            )
+
+        # Browser requests always carry Origin. Validate the destination Host
+        # as a second boundary against DNS rebinding and hostile virtual hosts.
+        # Native/local clients without Origin remain supported.
+        if request.url.hostname not in ALLOWED_API_HOSTS:
+            return JSONResponse(
+                status_code=421,
+                content={"detail": "Host API lokal tidak diizinkan."},
+            )
     return await call_next(request)
 
 
