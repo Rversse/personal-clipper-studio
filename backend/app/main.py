@@ -33,6 +33,42 @@ _EXPORT_WORKER_WAKE = threading.Event()
 _EXPORT_WORKER_THREAD: threading.Thread | None = None
 _EXPORT_WORKER_STOP = threading.Event()
 
+_JOB_CONTROLS_LOCK = threading.Lock()
+_JOB_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_JOB_SHUTDOWN = threading.Event()
+
+
+class JobCancelled(RuntimeError):
+    """Raised when a transcription or discovery job is cancelled."""
+
+
+def _register_job_control(job_id: str) -> threading.Event:
+    event = threading.Event()
+    with _JOB_CONTROLS_LOCK:
+        _JOB_CANCEL_EVENTS[job_id] = event
+        if _JOB_SHUTDOWN.is_set():
+            event.set()
+    return event
+
+
+def _unregister_job_control(job_id: str) -> None:
+    with _JOB_CONTROLS_LOCK:
+        _JOB_CANCEL_EVENTS.pop(job_id, None)
+
+
+def _cancel_background_jobs() -> None:
+    with _JOB_CONTROLS_LOCK:
+        active = list(_JOB_CANCEL_EVENTS.values())
+    for event in active:
+        event.set()
+    timestamp = now_iso()
+    with get_connection() as connection:
+        for table in ("transcription_jobs", "discovery_jobs"):
+            connection.execute(
+                f"UPDATE {table} SET status='cancelled', error='Proses dibatalkan karena aplikasi ditutup.', updated_at=? WHERE status IN ('queued','processing')",
+                (timestamp,),
+            )
+
 def _is_completed_export(path: Path) -> bool:
     """A final output is committed atomically by the renderer; verify its MP4 signature."""
     try:
@@ -107,9 +143,12 @@ async def lifespan(_: FastAPI):
             )
     recover_interrupted_exports()
     _EXPORT_WORKER_STOP.clear()
+    _JOB_SHUTDOWN.clear()
     start_export_worker()
     yield
     _EXPORT_WORKER_STOP.set()
+    _JOB_SHUTDOWN.set()
+    _cancel_background_jobs()
     _EXPORT_WORKER_WAKE.set()
     # Stop FFmpeg/FFprobe work before waiting for the worker to exit. This keeps
     # the desktop shutdown path from leaving orphaned encoder processes behind.
@@ -403,23 +442,36 @@ def transcription_payload(job_id: str) -> dict:
 
 
 def run_transcription_job(job_id: str, source_path: str, model_name: str, language: str | None) -> None:
+    cancel_event = _register_job_control(job_id)
+
+    def check_cancelled() -> None:
+        if cancel_event.is_set():
+            raise JobCancelled("Transkripsi dibatalkan.")
+
     def update_progress(value: float) -> None:
+        check_cancelled()
         with get_connection() as connection:
             connection.execute(
-                "UPDATE transcription_jobs SET progress=?, updated_at=? WHERE id=?",
+                "UPDATE transcription_jobs SET progress=?, updated_at=? WHERE id=? AND status='processing'",
                 (value, now_iso(), job_id),
             )
 
     try:
+        check_cancelled()
         with get_connection() as connection:
-            connection.execute(
-                "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=?",
+            claimed = connection.execute(
+                "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=? AND status='queued'",
                 (now_iso(), job_id),
-            )
+            ).rowcount
+        if not claimed:
+            return
         result = transcription.transcribe_file(
-            Path(source_path), model_name=model_name, language=language, progress=update_progress
+            Path(source_path), model_name=model_name, language=language,
+            progress=update_progress, cancel_check=check_cancelled,
         )
+        check_cancelled()
         with get_connection() as connection:
+            connection.execute("DELETE FROM transcript_segments WHERE job_id=?", (job_id,))
             for item in result["segments"]:
                 cursor = connection.execute(
                     "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
@@ -437,40 +489,36 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
                         probability = float(raw_probability) if raw_probability is not None else None
                         import math
                         if (
-                            word_text
-                            and math.isfinite(start)
-                            and math.isfinite(end)
+                            word_text and math.isfinite(start) and math.isfinite(end)
                             and item["start"] <= previous_word_end <= start < end <= item["end"]
                             and (probability is None or math.isfinite(probability) and 0 <= probability <= 1)
                         ):
-                            valid_words.append((
-                                job_id, segment_id, len(valid_words), start, end, word_text, probability
-                            ))
+                            valid_words.append((job_id, segment_id, len(valid_words), start, end, word_text, probability))
                             previous_word_end = end
                     except (KeyError, TypeError, ValueError, OverflowError):
                         continue
                 connection.executemany(
-                    """INSERT INTO transcript_words(
-                        job_id,segment_id,word_index,start,end,text,probability
-                    ) VALUES(?,?,?,?,?,?,?)""",
+                    "INSERT INTO transcript_words(job_id,segment_id,word_index,start,end,text,probability) VALUES(?,?,?,?,?,?,?)",
                     valid_words,
                 )
             connection.execute(
-                """UPDATE transcription_jobs
-                   SET status='completed', progress=1, detected_language=?,
-                       language_probability=?, duration=?, updated_at=?
-                   WHERE id=?""",
-                (
-                    result["language"], result["language_probability"],
-                    result["duration"], now_iso(), job_id,
-                ),
+                "UPDATE transcription_jobs SET status='completed', progress=1, detected_language=?, language_probability=?, duration=?, error=NULL, updated_at=? WHERE id=? AND status='processing'",
+                (result["language"], result["language_probability"], result["duration"], now_iso(), job_id),
+            )
+    except JobCancelled as error:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
+                (str(error), now_iso(), job_id),
             )
     except Exception as error:
         with get_connection() as connection:
             connection.execute(
-                "UPDATE transcription_jobs SET status='failed', error=?, updated_at=? WHERE id=?",
+                "UPDATE transcription_jobs SET status='failed', error=?, updated_at=? WHERE id=? AND status='processing'",
                 (str(error)[:2000], now_iso(), job_id),
             )
+    finally:
+        _unregister_job_control(job_id)
 
 
 @app.post(
@@ -528,6 +576,46 @@ async def start_transcription(
 @app.get("/api/transcriptions/{job_id}", response_model=TranscriptionResponse)
 async def get_transcription(job_id: str):
     return transcription_payload(job_id)
+
+
+@app.post("/api/transcriptions/{job_id}/cancel", response_model=TranscriptionStatusResponse)
+async def cancel_transcription(job_id: str):
+    with get_connection() as connection:
+        row = connection.execute(
+            "UPDATE transcription_jobs SET status='cancelled', error='Transkripsi dibatalkan oleh pengguna.', updated_at=? WHERE id=? AND status IN ('queued','processing') RETURNING *",
+            (now_iso(), job_id),
+        ).fetchone()
+    if row is None:
+        with get_connection() as connection:
+            exists = connection.execute("SELECT status FROM transcription_jobs WHERE id=?", (job_id,)).fetchone()
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
+        raise HTTPException(status_code=409, detail="Transkripsi sudah selesai atau tidak dapat dibatalkan.")
+    with _JOB_CONTROLS_LOCK:
+        event = _JOB_CANCEL_EVENTS.get(job_id)
+    if event:
+        event.set()
+    return dict(row)
+
+
+@app.post("/api/discovery/{job_id}/cancel", response_model=DiscoveryResponse)
+async def cancel_discovery(job_id: str):
+    with get_connection() as connection:
+        row = connection.execute(
+            "UPDATE discovery_jobs SET status='cancelled', error='Analisis AI dibatalkan oleh pengguna.', updated_at=? WHERE id=? AND status IN ('queued','processing') RETURNING id",
+            (now_iso(), job_id),
+        ).fetchone()
+    if row is None:
+        with get_connection() as connection:
+            exists = connection.execute("SELECT status FROM discovery_jobs WHERE id=?", (job_id,)).fetchone()
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Analisis AI tidak ditemukan.")
+        raise HTTPException(status_code=409, detail="Analisis AI sudah selesai atau tidak dapat dibatalkan.")
+    with _JOB_CONTROLS_LOCK:
+        event = _JOB_CANCEL_EVENTS.get(job_id)
+    if event:
+        event.set()
+    return discovery_payload(job_id)
 
 
 @app.patch("/api/transcriptions/{job_id}/segments/{segment_id}/words/{word_index}")
@@ -663,7 +751,14 @@ def normalize_candidate(
 
 
 def run_discovery_job(job_id: str) -> None:
+    cancel_event = _register_job_control(job_id)
+
+    def check_cancelled() -> None:
+        if cancel_event.is_set():
+            raise JobCancelled("Analisis AI dibatalkan.")
+
     try:
+        check_cancelled()
         with get_connection() as connection:
             job = connection.execute(
                 "SELECT * FROM discovery_jobs WHERE id=?", (job_id,)
@@ -701,10 +796,13 @@ def run_discovery_job(job_id: str) -> None:
             raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
 
         with get_connection() as connection:
-            connection.execute(
-                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=?",
+            claimed = connection.execute(
+                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=? AND status='queued'",
                 (now_iso(), job_id),
-            )
+            ).rowcount
+        if not claimed:
+            return
+        check_cancelled()
 
         audio_features = None
         if media is not None:
@@ -721,6 +819,7 @@ def run_discovery_job(job_id: str) -> None:
             raise ValueError("Transkrip kosong atau tidak dapat dibagi menjadi bagian analisis.")
 
         for chunk_index, chunk in enumerate(chunks):
+            check_cancelled()
             raw_candidates = ai_discovery.analyze_transcript_chunk(
                 chunk,
                 mode=job["mode"],
@@ -728,6 +827,7 @@ def run_discovery_job(job_id: str) -> None:
                 min_duration=job["min_duration"],
                 max_duration=job["max_duration"],
             )
+            check_cancelled()
             accepted: list[dict] = []
             for raw in raw_candidates:
                 if not isinstance(raw, dict):
@@ -802,17 +902,26 @@ def run_discovery_job(job_id: str) -> None:
                     (progress, now_iso(), job_id),
                 )
 
+        check_cancelled()
         with get_connection() as connection:
             connection.execute(
-                "UPDATE discovery_jobs SET status='completed', progress=1, updated_at=? WHERE id=?",
+                "UPDATE discovery_jobs SET status='completed', progress=1, error=NULL, updated_at=? WHERE id=? AND status='processing'",
                 (now_iso(), job_id),
+            )
+    except JobCancelled as error:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE discovery_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
+                (str(error), now_iso(), job_id),
             )
     except Exception as error:
         with get_connection() as connection:
             connection.execute(
-                "UPDATE discovery_jobs SET status='failed', error=?, updated_at=? WHERE id=?",
+                "UPDATE discovery_jobs SET status='failed', error=?, updated_at=? WHERE id=? AND status='processing'",
                 (str(error)[:2000], now_iso(), job_id),
             )
+    finally:
+        _unregister_job_control(job_id)
 
 
 @app.post(
