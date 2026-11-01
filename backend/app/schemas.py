@@ -84,6 +84,10 @@ class ClipCandidateResponse(BaseModel):
     rationale: str
     score: int
     category: str
+    boundary_quality: int = 50
+    opening_boundary: str = "Batas segmen transkrip"
+    ending_boundary: str = "Batas segmen transkrip"
+    context_note: str = ""
     created_at: str
 
 
