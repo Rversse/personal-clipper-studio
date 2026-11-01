@@ -27,6 +27,7 @@ The frontend retries the health endpoint while the service is starting and conti
 5. Persist project metadata locally in SQLite. Store Gemini API credentials in the current Windows user's Credential Manager; never persist them in SQLite, app settings files, or logs.
 6. Run transcription and rendering as background jobs with explicit state and cancellation.
 7. On restart, requeue interrupted exports from persisted render settings; retain a final MP4 only when the renderer's atomic commit left a valid MP4 signature, and clean job-scoped temporary artifacts before retrying.
+8. On graceful desktop shutdown, stop dequeuing exports, cancel active FFmpeg processes, persist cancellation, and wait for the export worker to exit before the backend process is terminated.
 8. AI output is advisory. Every candidate is reviewed by the user before export.
 9. Keep media processing provider-independent so FFmpeg and transcription engines can be replaced.
 
