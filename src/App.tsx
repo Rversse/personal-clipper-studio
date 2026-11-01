@@ -75,6 +75,13 @@ function App() {
   const [splitPoints, setSplitPoints] = useState<number[]>([]);
   const [clipSequence, setClipSequence] = useState<ClipSegment[]>([]);
   const [selectedSequenceIndex, setSelectedSequenceIndex] = useState<number | null>(null);
+  const [draggedTimelineIndex, setDraggedTimelineIndex] = useState<number | null>(null);
+  const timelineLaneRef = useRef<HTMLDivElement>(null);
+  const timelineResizeRef = useRef<{
+    index: number; edge: "start" | "end"; startX: number;
+    initialStart: number; initialEnd: number; secondsPerPixel: number;
+    isSequence: boolean;
+  } | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [editorSaved, setEditorSaved] = useState(false);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
@@ -85,6 +92,27 @@ function App() {
   const editorSourceDuration = Math.max(0, media.find(item => item.id === aiMediaId)?.duration ?? previewRef.current?.duration ?? 0);
   const visibleSplitPoints = splitPoints.filter(point => point > editStart && point < editEnd);
   const visibleSubtitleSegments = (transcription?.media_id === aiMediaId ? transcription.segments ?? [] : []).filter(segment => segment.end > editStart && segment.start < editEnd);
+  const timelineTranscriptSegments = transcription?.media_id === aiMediaId ? transcription.segments ?? [] : [];
+  const timelineClips: ClipSegment[] = clipSequence.length ? clipSequence : editEnd > editStart
+    ? [{ start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY }]
+    : [];
+  const timelineTotalDuration = Math.max(0.001, timelineClips.reduce((sum, clip) => sum + clip.end - clip.start, 0));
+  const timelineSelectedIndex = selectedSequenceIndex !== null && selectedSequenceIndex < timelineClips.length
+    ? selectedSequenceIndex : timelineClips.length ? 0 : null;
+  const timelinePlayheadOutput = (() => {
+    if (!timelineClips.length) return 0;
+    let elapsed = 0;
+    for (let index = 0; index < timelineClips.length; index += 1) {
+      const clip = timelineClips[index];
+      if ((index === timelineSelectedIndex || (playheadSeconds >= clip.start && playheadSeconds <= clip.end))
+          && playheadSeconds >= clip.start && playheadSeconds <= clip.end) {
+        return elapsed + Math.max(0, Math.min(clip.end - clip.start, playheadSeconds - clip.start));
+      }
+      elapsed += clip.end - clip.start;
+    }
+    const selected = timelineSelectedIndex === null ? timelineClips[0] : timelineClips[timelineSelectedIndex];
+    return selected ? timelineClips.slice(0, timelineSelectedIndex ?? 0).reduce((sum, clip) => sum + clip.end - clip.start, 0) + Math.max(0, Math.min(selected.end - selected.start, playheadSeconds - selected.start)) : 0;
+  })();
 
   const loadProjects = useCallback(async () => {
     try {
@@ -466,6 +494,117 @@ function App() {
     }
   }
 
+  function reorderTimelineClip(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= clipSequence.length || toIndex >= clipSequence.length) return;
+    setClipSequence(previous => {
+      const next = [...previous];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setSelectedSequenceIndex(current => {
+      if (current === null) return null;
+      if (current === fromIndex) return toIndex;
+      if (fromIndex < current && current <= toIndex) return current - 1;
+      if (toIndex <= current && current < fromIndex) return current + 1;
+      return current;
+    });
+  }
+
+  function seekTimelineOutput(clientX: number, lane: HTMLDivElement) {
+    if (!timelineClips.length) return;
+    const rect = lane.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const outputTime = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * timelineTotalDuration;
+    let elapsed = 0;
+    for (let index = 0; index < timelineClips.length; index += 1) {
+      const clip = timelineClips[index];
+      const clipDuration = clip.end - clip.start;
+      if (outputTime <= elapsed + clipDuration || index === timelineClips.length - 1) {
+        const sourceTime = clip.start + Math.max(0, Math.min(clipDuration, outputTime - elapsed));
+        if (clipSequence.length) selectSequenceClip(clip, index);
+        seekPreview(sourceTime);
+        return;
+      }
+      elapsed += clipDuration;
+    }
+  }
+
+  function splitSelectedTimelineClip() {
+    const index = selectedSequenceIndex;
+    const clip = index !== null ? clipSequence[index] : { start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY };
+    if (!clip) return;
+    const point = previewRef.current?.currentTime ?? playheadSeconds;
+    if (point <= clip.start + 0.1 || point >= clip.end - 0.1) return;
+    const before = { ...clip, end: point };
+    const after = { ...clip, start: point };
+    if (index === null) {
+      setClipSequence([before, after]);
+      setSelectedSequenceIndex(1);
+    } else {
+      setClipSequence(previous => previous.flatMap((item, itemIndex) => itemIndex === index ? [before, after] : [item]));
+      setSelectedSequenceIndex(index + 1);
+    }
+    setEditStart(point);
+    setEditEnd(clip.end);
+    seekPreview(point);
+  }
+
+  function beginTimelineTrim(event: React.PointerEvent<HTMLSpanElement>, index: number, edge: "start" | "end") {
+    event.preventDefault();
+    event.stopPropagation();
+    const lane = timelineLaneRef.current;
+    if (!lane || !timelineClips[index]) return;
+    const clip = timelineClips[index];
+    if (clipSequence.length) {
+      setSelectedSequenceIndex(index);
+      setEditStart(clip.start);
+      setEditEnd(clip.end);
+      setCropZoom(clip.crop_zoom ?? cropZoom);
+      setCropX(clip.crop_x ?? cropX);
+      setCropY(clip.crop_y ?? cropY);
+    }
+    const element = event.currentTarget;
+    element.setPointerCapture(event.pointerId);
+    timelineResizeRef.current = {
+      index, edge, startX: event.clientX,
+      initialStart: clip.start, initialEnd: clip.end,
+      secondsPerPixel: timelineTotalDuration / Math.max(1, lane.getBoundingClientRect().width),
+      isSequence: clipSequence.length > 0,
+    };
+  }
+
+  function moveTimelineTrim(event: React.PointerEvent<HTMLSpanElement>) {
+    const drag = timelineResizeRef.current;
+    if (!drag) return;
+    const delta = (event.clientX - drag.startX) * drag.secondsPerPixel;
+    const nextStart = drag.edge === "start"
+      ? Math.max(0, Math.min(drag.initialEnd - 0.5, drag.initialStart + delta))
+      : drag.initialStart;
+    const nextEnd = drag.edge === "end"
+      ? Math.max(drag.initialStart + 0.5, drag.initialEnd + delta)
+      : drag.initialEnd;
+    if (drag.isSequence) {
+      setClipSequence(previous => previous.map((clip, index) => index === drag.index
+        ? { ...clip, start: nextStart, end: nextEnd }
+        : clip));
+      if (selectedSequenceIndex === drag.index) {
+        setEditStart(nextStart);
+        setEditEnd(nextEnd);
+      }
+    } else {
+      setEditStart(nextStart);
+      setEditEnd(nextEnd);
+    }
+  }
+
+  function endTimelineTrim(event: React.PointerEvent<HTMLSpanElement>) {
+    timelineResizeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   function seekPreview(seconds: number) {
     if (previewRef.current) {
       previewRef.current.currentTime = seconds;
@@ -568,6 +707,80 @@ function App() {
                     <div className="split-toolbar"><button className="secondary-button" onClick={addSplitPoint}>Split at playhead</button><span>{splitPoints.filter(point=>point>editStart&&point<editEnd).length} split point</span></div>
                     {splitPoints.some(point=>point>editStart&&point<editEnd) && <button className="secondary-button sequence-add" onClick={addSplitRangesToSequence} disabled={clipSequence.length>=100}>Add split ranges to sequence</button>}
                     {splitPoints.filter(point=>point>editStart&&point<editEnd).length>0 && <div className="split-list">{splitPoints.filter(point=>point>editStart&&point<editEnd).map(point=><button key={point} onClick={()=>setSplitPoints(previous=>previous.filter(item=>item!==point))}>{formatTimestamp(point)} <X size={11}/></button>)}</div>}
+                    <section className="multitrack-panel" aria-label="Multi-track timeline editor">
+                      <div className="multitrack-heading">
+                        <div><strong>Timeline</strong><small>Arrange, trim, split, and review the export sequence</small></div>
+                        <span>{timelineClips.length} clips · {formatDuration(timelineTotalDuration)}</span>
+                      </div>
+                      <div className="multitrack-ruler">
+                        <div className="multitrack-label-spacer">TRACKS</div>
+                        <div className="multitrack-ruler-lane">
+                          {[0,0.25,0.5,0.75,1].map(fraction=><span key={fraction} style={{left:(fraction*100)+"%"}}>{formatTimestamp(timelineTotalDuration*fraction)}</span>)}
+                        </div>
+                      </div>
+                      <div className="multitrack-row">
+                        <div className="multitrack-label"><b>VIDEO</b><small>{clipSequence.length ? "Sequence" : "Active range"}</small></div>
+                        <div className="multitrack-lane video-lane" ref={timelineLaneRef} onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
+                          {timelineClips.map((clip,index)=>{
+                            const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
+                            const left=offset/timelineTotalDuration*100;
+                            const width=(clip.end-clip.start)/timelineTotalDuration*100;
+                            return <div key={String(clip.start)+"-"+String(clip.end)+"-"+index}
+                              className={"multitrack-clip video-clip"+(timelineSelectedIndex===index?" selected":"")+(draggedTimelineIndex===index?" dragging":"")}
+                              style={{left:left+"%",width:width+"%"}}
+                              draggable={clipSequence.length>1}
+                              onDragStart={event=>{event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",String(index));setDraggedTimelineIndex(index);}}
+                              onDragOver={event=>{if(clipSequence.length>1){event.preventDefault();event.dataTransfer.dropEffect="move";}}}
+                              onDrop={event=>{event.preventDefault();const from=Number(event.dataTransfer.getData("text/plain"));if(Number.isInteger(from))reorderTimelineClip(from,index);setDraggedTimelineIndex(null);}}
+                              onDragEnd={()=>setDraggedTimelineIndex(null)}
+                              onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(clip.start);}}
+                              onKeyDown={event=>{if(event.key==="ArrowLeft"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.max(0,index-1));}if(event.key==="ArrowRight"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.min(clipSequence.length-1,index+1));}}}
+                              role="button" tabIndex={0} aria-label={"Video clip "+(index+1)+", "+formatTimestamp(clip.start)+" to "+formatTimestamp(clip.end)}>
+                              {clipSequence.length>0 && <span className="timeline-trim-handle left" title="Drag to trim clip start" onPointerDown={event=>beginTimelineTrim(event,index,"start")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
+                              <b>{String(index+1).padStart(2,"0")}</b><span className="timeline-clip-time">{formatTimestamp(clip.start)}–{formatTimestamp(clip.end)}</span>
+                              <small>{(clip.crop_zoom??1).toFixed(1)}×</small>
+                              {clipSequence.length>0 && <span className="timeline-trim-handle right" title="Drag to trim clip end" onPointerDown={event=>beginTimelineTrim(event,index,"end")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
+                            </div>;
+                          })}
+                          {timelineClips.length>0 && <i className="multitrack-playhead" style={{left:(timelinePlayheadOutput/timelineTotalDuration*100)+"%"}}/>}
+                        </div>
+                      </div>
+                      <div className="multitrack-row">
+                        <div className="multitrack-label"><b>AUDIO</b><small>Linked source</small></div>
+                        <div className="multitrack-lane audio-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
+                          {timelineClips.map((clip,index)=>{
+                            const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
+                            return <div key={"audio-"+index} className="multitrack-clip audio-clip" style={{left:(offset/timelineTotalDuration*100)+"%",width:((clip.end-clip.start)/timelineTotalDuration*100)+"%"}} onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(clip.start);}}>
+                              <span className="audio-waveform" aria-hidden="true">▂▅▃▇▅▂▆▄▇▃▅▂▇▄▆▃▅▇▂▅▄▇▃▆▂▅</span>
+                            </div>;
+                          })}
+                        </div>
+                      </div>
+                      <div className="multitrack-row">
+                        <div className="multitrack-label"><b>CAPTIONS</b><small>Transcript</small></div>
+                        <div className="multitrack-lane captions-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
+                          {timelineClips.flatMap((clip,index)=>{
+                            const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
+                            return timelineTranscriptSegments.filter(segment=>segment.end>clip.start&&segment.start<clip.end).map((segment,segmentIndex)=>{
+                              const start=Math.max(segment.start,clip.start);
+                              const end=Math.min(segment.end,clip.end);
+                              return <button type="button" key={"caption-"+index+"-"+segmentIndex+"-"+start}
+                                className="timeline-caption-clip"
+                                style={{left:((offset+start-clip.start)/timelineTotalDuration*100)+"%",width:((end-start)/timelineTotalDuration*100)+"%"}}
+                                title={segment.text}
+                                onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(start);}}>
+                                {segment.text}
+                              </button>;
+                            });
+                          })}
+                          {timelineClips.length>0&&timelineTranscriptSegments.length===0&&<span className="timeline-empty-hint">Transcribe video to populate caption track</span>}
+                        </div>
+                      </div>
+                      <div className="multitrack-footer">
+                        <span>Drag clip blocks to reorder · drag trim handles to adjust in/out points</span>
+                        <button className="secondary-button" onClick={splitSelectedTimelineClip} disabled={!timelineClips.length || playheadSeconds<=((timelineSelectedIndex===null?editStart:timelineClips[timelineSelectedIndex].start)+0.1) || playheadSeconds>=((timelineSelectedIndex===null?editEnd:timelineClips[timelineSelectedIndex].end)-0.1)}>Split selected at playhead</button>
+                      </div>
+                    </section>
                     <div className="sequence-panel">
                       <div className="sequence-heading"><strong>Render sequence</strong><span>{clipSequence.length} clips · {formatDuration(clipSequence.reduce((sum,clip)=>sum+clip.end-clip.start,0))}</span></div>
                       <button className="secondary-button sequence-add" onClick={addCurrentRangeToSequence} disabled={editEnd<=editStart||clipSequence.length>=100}>Add current range to sequence <Plus size={13}/></button>
