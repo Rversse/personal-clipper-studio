@@ -52,6 +52,9 @@ jobs:
           --collect-all ctranslate2
           --collect-all tokenizers
           --collect-all av
+          --collect-all keyring
+          --collect-all win32ctypes
+          --hidden-import keyring.backends.Windows
           backend/desktop_runner.py
       - name: Stage packaged API resources
         shell: pwsh
