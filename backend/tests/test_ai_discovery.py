@@ -51,6 +51,38 @@ def seed_completed_transcript():
     return media_id, transcript_id
 
 
+
+def test_queued_discovery_can_be_cancelled(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ai_discovery, "provider_settings",
+        lambda: {"provider": "gemini", "model": "test-model"},
+    )
+    with TestClient(app) as client:
+        media_id, transcript_id = seed_completed_transcript()
+        created = client.post(
+            f"/api/media/{media_id}/discovery",
+            json={"transcription_id": transcript_id},
+        )
+        assert created.status_code == 202
+        # The TestClient executes background tasks before returning, so create a
+        # queued row directly to exercise the cancellation API deterministically.
+        job_id = str(uuid.uuid4())
+        timestamp = main_module.now_iso()
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO discovery_jobs(
+                    id,media_id,transcription_id,status,provider,model_name,mode,
+                    min_duration,max_duration,created_at,updated_at
+                ) VALUES(?,?,?,'queued','gemini','test-model','auto',30,60,?,?)""",
+                (job_id, media_id, transcript_id, timestamp, timestamp),
+            )
+        response = client.post(f"/api/discovery/{job_id}/cancel")
+        assert response.status_code == 200
+        assert response.json()["status"] == "cancelled"
+        assert "dibatalkan" in response.json()["error"]
+
+
 def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(
