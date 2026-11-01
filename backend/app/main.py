@@ -471,6 +471,11 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
         )
         check_cancelled()
         with get_connection() as connection:
+            current = connection.execute(
+                "SELECT status FROM transcription_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if current is None or current["status"] != "processing":
+                raise JobCancelled("Transkripsi dibatalkan.")
             connection.execute("DELETE FROM transcript_segments WHERE job_id=?", (job_id,))
             for item in result["segments"]:
                 cursor = connection.execute(
@@ -580,6 +585,10 @@ async def get_transcription(job_id: str):
 
 @app.post("/api/transcriptions/{job_id}/cancel", response_model=TranscriptionStatusResponse)
 async def cancel_transcription(job_id: str):
+    with _JOB_CONTROLS_LOCK:
+        event = _JOB_CANCEL_EVENTS.get(job_id)
+    if event:
+        event.set()
     with get_connection() as connection:
         row = connection.execute(
             "UPDATE transcription_jobs SET status='cancelled', error='Transkripsi dibatalkan oleh pengguna.', updated_at=? WHERE id=? AND status IN ('queued','processing') RETURNING *",
@@ -591,15 +600,15 @@ async def cancel_transcription(job_id: str):
         if exists is None:
             raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
         raise HTTPException(status_code=409, detail="Transkripsi sudah selesai atau tidak dapat dibatalkan.")
-    with _JOB_CONTROLS_LOCK:
-        event = _JOB_CANCEL_EVENTS.get(job_id)
-    if event:
-        event.set()
     return dict(row)
 
 
 @app.post("/api/discovery/{job_id}/cancel", response_model=DiscoveryResponse)
 async def cancel_discovery(job_id: str):
+    with _JOB_CONTROLS_LOCK:
+        event = _JOB_CANCEL_EVENTS.get(job_id)
+    if event:
+        event.set()
     with get_connection() as connection:
         row = connection.execute(
             "UPDATE discovery_jobs SET status='cancelled', error='Analisis AI dibatalkan oleh pengguna.', updated_at=? WHERE id=? AND status IN ('queued','processing') RETURNING id",
@@ -611,10 +620,6 @@ async def cancel_discovery(job_id: str):
         if exists is None:
             raise HTTPException(status_code=404, detail="Analisis AI tidak ditemukan.")
         raise HTTPException(status_code=409, detail="Analisis AI sudah selesai atau tidak dapat dibatalkan.")
-    with _JOB_CONTROLS_LOCK:
-        event = _JOB_CANCEL_EVENTS.get(job_id)
-    if event:
-        event.set()
     return discovery_payload(job_id)
 
 
@@ -858,6 +863,11 @@ def run_discovery_job(job_id: str) -> None:
                 accepted.append(candidate)
 
             with get_connection() as connection:
+                current = connection.execute(
+                    "SELECT status FROM discovery_jobs WHERE id=?", (job_id,)
+                ).fetchone()
+                if current is None or current["status"] != "processing":
+                    raise JobCancelled("Analisis AI dibatalkan.")
                 existing_rows = connection.execute(
                     "SELECT start_seconds,end_seconds FROM clip_candidates WHERE discovery_job_id=?",
                     (job_id,),
