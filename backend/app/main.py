@@ -19,7 +19,8 @@ from .media import create_thumbnail, probe_media
 from .clip_boundaries import refine_candidate_boundaries
 from .schemas import (
     DiscoveryCreate, DiscoveryResponse, MediaResponse, ProjectCreate, ProjectResponse,
-    TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, ExportCreate, ExportResponse,
+    TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, TranscriptWordUpdate,
+    ExportCreate, ExportResponse,
 )
 from . import ai_discovery, transcription, rendering
 
@@ -279,12 +280,20 @@ def transcription_payload(job_id: str) -> dict:
         if job is None:
             raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
         segments = connection.execute(
-            "SELECT start,end,text FROM transcript_segments WHERE job_id=? ORDER BY start",
+            "SELECT id,start,end,text FROM transcript_segments WHERE job_id=? ORDER BY start",
             (job_id,),
         ).fetchall()
+        segment_payloads = []
+        for segment in segments:
+            words = connection.execute(
+                """SELECT start,end,text,probability FROM transcript_words
+                   WHERE segment_id=? ORDER BY word_index""",
+                (segment["id"],),
+            ).fetchall()
+            segment_payloads.append({**dict(segment), "words": [dict(word) for word in words]})
     return {
         **dict(job),
-        "segments": [dict(segment) for segment in segments],
+        "segments": segment_payloads,
     }
 
 
@@ -306,13 +315,39 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
             Path(source_path), model_name=model_name, language=language, progress=update_progress
         )
         with get_connection() as connection:
-            connection.executemany(
-                "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
-                [
-                    (job_id, item["start"], item["end"], item["text"])
-                    for item in result["segments"]
-                ],
-            )
+            for item in result["segments"]:
+                cursor = connection.execute(
+                    "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
+                    (job_id, item["start"], item["end"], item["text"]),
+                )
+                segment_id = cursor.lastrowid
+                valid_words = []
+                for word in item.get("words", []):
+                    try:
+                        start = float(word["start"])
+                        end = float(word["end"])
+                        word_text = str(word["text"]).strip()
+                        raw_probability = word.get("probability")
+                        probability = float(raw_probability) if raw_probability is not None else None
+                        import math
+                        if (
+                            word_text
+                            and math.isfinite(start)
+                            and math.isfinite(end)
+                            and item["start"] <= start < end <= item["end"]
+                            and (probability is None or math.isfinite(probability) and 0 <= probability <= 1)
+                        ):
+                            valid_words.append((
+                                job_id, segment_id, len(valid_words), start, end, word_text, probability
+                            ))
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        continue
+                connection.executemany(
+                    """INSERT INTO transcript_words(
+                        job_id,segment_id,word_index,start,end,text,probability
+                    ) VALUES(?,?,?,?,?,?,?)""",
+                    valid_words,
+                )
             connection.execute(
                 """UPDATE transcription_jobs
                    SET status='completed', progress=1, detected_language=?,
@@ -364,6 +399,53 @@ async def start_transcription(
 
 @app.get("/api/transcriptions/{job_id}", response_model=TranscriptionResponse)
 async def get_transcription(job_id: str):
+    return transcription_payload(job_id)
+
+
+@app.patch("/api/transcriptions/{job_id}/segments/{segment_id}/words/{word_index}")
+async def update_transcript_word(
+    job_id: str,
+    segment_id: int,
+    word_index: int,
+    payload: TranscriptWordUpdate,
+):
+    import math
+
+    if not math.isfinite(payload.start) or not math.isfinite(payload.end) or payload.end <= payload.start:
+        raise HTTPException(status_code=422, detail="Rentang waktu kata tidak valid.")
+    with get_connection() as connection:
+        segment = connection.execute(
+            "SELECT start,end FROM transcript_segments WHERE id=? AND job_id=?",
+            (segment_id, job_id),
+        ).fetchone()
+        if segment is None:
+            raise HTTPException(status_code=404, detail="Segmen transkrip tidak ditemukan.")
+        word = connection.execute(
+            """SELECT id FROM transcript_words
+               WHERE job_id=? AND segment_id=? AND word_index=?""",
+            (job_id, segment_id, word_index),
+        ).fetchone()
+        if word is None:
+            raise HTTPException(status_code=404, detail="Timestamp kata tidak ditemukan.")
+        previous = connection.execute(
+            "SELECT start,end FROM transcript_words WHERE segment_id=? AND word_index=?",
+            (segment_id, word_index - 1),
+        ).fetchone() if word_index > 0 else None
+        following = connection.execute(
+            "SELECT start,end FROM transcript_words WHERE segment_id=? AND word_index=?",
+            (segment_id, word_index + 1),
+        ).fetchone()
+        if payload.start < segment["start"] or payload.end > segment["end"]:
+            raise HTTPException(status_code=422, detail="Timestamp kata harus berada di dalam rentang segmen.")
+        if previous and payload.start < previous["end"]:
+            raise HTTPException(status_code=422, detail="Timestamp kata bertabrakan dengan kata sebelumnya.")
+        if following and payload.end > following["start"]:
+            raise HTTPException(status_code=422, detail="Timestamp kata bertabrakan dengan kata berikutnya.")
+        connection.execute(
+            """UPDATE transcript_words SET start=?,end=?,text=?
+               WHERE job_id=? AND segment_id=? AND word_index=?""",
+            (payload.start, payload.end, payload.text.strip(), job_id, segment_id, word_index),
+        )
     return transcription_payload(job_id)
 
 

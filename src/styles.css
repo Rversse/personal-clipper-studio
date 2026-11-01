@@ -97,3 +97,46 @@
 .candidate-boundary-notes span{display:flex;gap:7px;align-items:flex-start}
 .candidate-boundary-notes b{min-width:38px;color:#c4d5a2;font-size:8px;letter-spacing:.09em}
 .candidate-context-note{display:block;color:#8c9a7c;font-size:9px;line-height:1.45;margin-top:5px}
+
+
+.word-edit-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border, #2b3038);
+  border-radius: 10px;
+  background: rgba(255,255,255,.025);
+}
+.word-edit-list > strong {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted, #9299a5);
+}
+.word-edit-row {
+  display: grid;
+  grid-template-columns: minmax(90px,1fr) minmax(88px,110px) minmax(88px,110px) auto;
+  align-items: end;
+  gap: 8px;
+}
+.word-edit-row > span {
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+.word-edit-row label {
+  display: grid;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted, #9299a5);
+}
+.word-edit-row input { width: 100%; min-width: 0; }
+.word-edit-row button { min-height: 32px; padding: 0 10px; font-size: 11px; }
+@media (max-width: 720px) {
+  .word-edit-row { grid-template-columns: 1fr 1fr; }
+  .word-edit-row > span { grid-column: 1 / -1; }
+  .word-edit-row button { grid-column: 1 / -1; }
+}

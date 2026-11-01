@@ -10,7 +10,9 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
 type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
-type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
+type TranscriptWord = { start:number; end:number; text:string; probability:number|null };
+type TranscriptSegment = { id:number|null; start:number; end:number; text:string; words:TranscriptWord[] };
+type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: TranscriptSegment[] };
 type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: number; crop_y?: number; audio_volume?: number };
 type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; output_preset?:string; quality_profile?:string; frame_rate?:number|null; normalize_audio?:boolean; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string;boundary_quality:number;opening_boundary:string;ending_boundary:string;context_note:string}[] };
@@ -72,6 +74,8 @@ function App() {
   const [audioVolume, setAudioVolume] = useState(1);
   const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
   const [subtitleTiming, setSubtitleTiming] = useState<Record<number, { start: number; end: number }>>({});
+  const [wordTiming, setWordTiming] = useState<Record<string, {start:number;end:number;text:string}>>({});
+  const [wordBusy, setWordBusy] = useState<string>("");
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
   const [subtitleFontSize, setSubtitleFontSize] = useState(52);
   const [subtitlePosition, setSubtitlePosition] = useState(8);
@@ -170,6 +174,8 @@ function App() {
     setTranscription(null);
     setSubtitleText({});
     setSubtitleTiming({});
+    setWordTiming({});
+    setWordBusy("");
     setBurnSubtitles(false);
     let cancelled = false;
     const restoreLatestJobs = async () => {
@@ -263,9 +269,15 @@ function App() {
     if (!aiMediaId || editEnd <= editStart) return;
     const selectedClips = clipSequence.length ? clipSequence : [{ start: editStart, end: editEnd, audio_volume: audioVolume }];
     const subtitleSource = transcription?.media_id === aiMediaId ? transcription.segments ?? [] : [];
-    const selectedSubtitles = subtitleSource.filter((segment,index) => {
+    const selectedSubtitles = subtitleSource.flatMap((segment,index) => {
       const timing = getSubtitleRange(index, segment);
-      return selectedClips.some(clip => timing.end > clip.start && timing.start < clip.end);
+      const words = segment.words?.length
+        ? segment.words.map((word,wordIndex)=>currentWordTiming(segment.id,wordIndex,word))
+        : [];
+      const captionText = words.length ? words.map(word=>word.text).join(" ") : (subtitleText[index] ?? segment.text);
+      return selectedClips.some(clip => timing.end > clip.start && timing.start < clip.end)
+        ? [{start:timing.start,end:timing.end,text:captionText}]
+        : [];
     });
     setExportBusy(true);
     setError("");
@@ -590,6 +602,26 @@ function App() {
     }
   }
 
+  function wordKey(segmentId:number|null, wordIndex:number) { return `${segmentId ?? "legacy"}:${wordIndex}`; }
+  function currentWordTiming(segmentId:number|null, wordIndex:number, word:TranscriptWord) {
+    return wordTiming[wordKey(segmentId,wordIndex)] ?? {start:word.start,end:word.end,text:word.text};
+  }
+  async function saveWordTiming(segment:TranscriptSegment, wordIndex:number, next:{start:number;end:number;text:string}) {
+    if (!segment.id || !transcription) return;
+    const key=wordKey(segment.id,wordIndex);
+    setWordBusy(key);
+    try {
+      const response=await fetch(`${API_BASE}/api/transcriptions/${transcription.id}/segments/${segment.id}/words/${wordIndex}`,{
+        method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)
+      });
+      const result=await response.json();
+      if(!response.ok) throw new Error(result.detail ?? "Gagal menyimpan timing kata.");
+      setTranscription(result as Transcription);
+      setWordTiming(previous=>{const copy={...previous};delete copy[key];return copy;});
+    } catch(error) {
+      setError(error instanceof Error ? error.message : "Gagal menyimpan timing kata.");
+    } finally {setWordBusy("");}
+  }
   function updateSubtitleRange(index: number, edge: "start" | "end", value: number) {
     const segment = timelineTranscriptSegments[index];
     if (!segment || !Number.isFinite(value)) return;
@@ -1000,7 +1032,7 @@ function App() {
                   <label><span>Opasitas background <output>{subtitleBackground}%</output></span><input type="range" min="0" max="90" step="5" value={subtitleBackground} onChange={e=>setSubtitleBackground(Number(e.target.value))}/></label>
                 </div>
                 <div className={"subtitle-sample " + subtitlePreset} style={{alignItems:"end",paddingBottom:String(subtitlePosition)+"%"}}><span style={{fontSize:String(Math.max(12,Math.round(subtitleFontSize*0.36)))+"px",WebkitTextStroke:String(Math.min(2,subtitleOutline*0.25))+"px #000",backgroundColor:subtitleBackground?"rgba(0,0,0,"+(subtitleBackground/100)+")":(subtitlePreset==="highlight"?undefined:"transparent"),padding:subtitleBackground?"5px 9px":undefined}}>{visibleSubtitleSegments.length ? (subtitleText[transcription.segments.indexOf(visibleSubtitleSegments[0])] ?? visibleSubtitleSegments[0].text) : "Preview subtitle"}</span></div>
-                <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=timelineTranscriptSegments.indexOf(segment);const timing=getSubtitleRange(index,segment);return <div className="subtitle-row" key={index}><div className="subtitle-timing-fields"><button className="subtitle-time" onClick={()=>seekPreview(timing.start)}>{formatTimestamp(timing.start)}</button><label><span>IN</span><input type="number" min="0" max={timing.end-0.05} step="0.05" value={Number(timing.start.toFixed(2))} onChange={event=>updateSubtitleRange(index,"start",Number(event.target.value))}/></label><label><span>OUT</span><input type="number" min={timing.start+0.05} max={editorSourceDuration || undefined} step="0.05" value={Number(timing.end.toFixed(2))} onChange={event=>updateSubtitleRange(index,"end",Number(event.target.value))}/></label></div><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(timing.start)}/></div>})}</div>
+                <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=timelineTranscriptSegments.indexOf(segment);const timing=getSubtitleRange(index,segment);return <div className="subtitle-row" key={index}><div className="subtitle-timing-fields"><button className="subtitle-time" onClick={()=>seekPreview(timing.start)}>{formatTimestamp(timing.start)}</button><label><span>IN</span><input type="number" min="0" max={timing.end-0.05} step="0.05" value={Number(timing.start.toFixed(2))} onChange={event=>updateSubtitleRange(index,"start",Number(event.target.value))}/></label><label><span>OUT</span><input type="number" min={timing.start+0.05} max={editorSourceDuration || undefined} step="0.05" value={Number(timing.end.toFixed(2))} onChange={event=>updateSubtitleRange(index,"end",Number(event.target.value))}/></label></div><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(timing.start)}/>{segment.words?.length ? <div className="word-edit-list"><strong>Word timing</strong>{segment.words.map((word,wordIndex)=>{const edited=currentWordTiming(segment.id,wordIndex,word);const key=wordKey(segment.id,wordIndex);return <div className="word-edit-row" key={wordIndex}><span>{wordIndex+1}. {edited.text}</span><label>IN<input type="number" step="0.01" min={segment.start} max={edited.end-0.01} value={Number(edited.start.toFixed(2))} onChange={event=>setWordTiming(previous=>({...previous,[key]:{...edited,start:Number(event.target.value)}}))}/></label><label>OUT<input type="number" step="0.01" min={edited.start+0.01} max={segment.end} value={Number(edited.end.toFixed(2))} onChange={event=>setWordTiming(previous=>({...previous,[key]:{...edited,end:Number(event.target.value)}}))}/></label><button className="secondary-button" disabled={!segment.id || wordBusy===key} onClick={()=>void saveWordTiming(segment,wordIndex,edited)}>{wordBusy===key?"Saving…":"Save"}</button></div>})}</div> : <small className="muted-label">Word timestamps unavailable · segment timing fallback</small>}</div>})}</div>
                 <p className="editor-disclaimer">Subtitle yang dikoreksi dan preset akan ikut dirender saat opsi burn-in diaktifkan. Tanpa opsi tersebut, video diekspor tanpa subtitle tertanam.</p>
               </div>}
             </section>

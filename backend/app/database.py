@@ -70,6 +70,18 @@ def ensure_storage() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_transcription_media ON transcription_jobs(media_id);
             CREATE INDEX IF NOT EXISTS idx_transcript_job ON transcript_segments(job_id);
+            CREATE TABLE IF NOT EXISTS transcript_words (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL REFERENCES transcription_jobs(id) ON DELETE CASCADE,
+                segment_id INTEGER NOT NULL REFERENCES transcript_segments(id) ON DELETE CASCADE,
+                word_index INTEGER NOT NULL,
+                start REAL NOT NULL CHECK(start >= 0),
+                end REAL NOT NULL CHECK(end > start),
+                text TEXT NOT NULL,
+                probability REAL CHECK(probability IS NULL OR (probability >= 0 AND probability <= 1)),
+                UNIQUE(segment_id, word_index)
+            );
+            CREATE INDEX IF NOT EXISTS idx_transcript_words_job ON transcript_words(job_id, start);
             CREATE TABLE IF NOT EXISTS discovery_jobs (
                 id TEXT PRIMARY KEY,
                 media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
