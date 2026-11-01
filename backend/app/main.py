@@ -950,6 +950,32 @@ async def start_export(
     for segment in clip_segments:
         if segment["end"] <= segment["start"]:
             raise HTTPException(status_code=422, detail="Titik akhir setiap klip harus lebih besar dari titik awal.")
+    if payload.burn_subtitles and not payload.subtitle_segments:
+        with get_connection() as connection:
+            transcript_job = connection.execute(
+                """SELECT id FROM transcription_jobs
+                   WHERE media_id=? AND status='completed'
+                   ORDER BY created_at DESC LIMIT 1""",
+                (asset_id,),
+            ).fetchone()
+            if transcript_job:
+                subtitle_rows = connection.execute(
+                    """SELECT s.id,s.start AS segment_start,s.end AS segment_end,s.text,
+                              w.start,w.end,w.text AS word_text
+                       FROM transcript_segments s
+                       LEFT JOIN transcript_words w ON w.segment_id=s.id
+                       WHERE s.job_id=? ORDER BY s.start,w.word_index""",
+                    (transcript_job["id"],),
+                ).fetchall()
+                for row in subtitle_rows:
+                    if row["word_text"] is not None:
+                        payload.subtitle_segments.append({
+                            "start": row["start"], "end": row["end"], "text": row["word_text"]
+                        })
+                    else:
+                        payload.subtitle_segments.append({
+                            "start": row["segment_start"], "end": row["segment_end"], "text": row["text"]
+                        })
     try:
         rendering.available_encoder()
         if payload.burn_subtitles and not rendering.subtitles_filter_available():

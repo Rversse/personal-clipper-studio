@@ -274,9 +274,12 @@ function App() {
       const words = segment.words?.length
         ? segment.words.map((word,wordIndex)=>currentWordTiming(segment.id,wordIndex,word))
         : [];
-      const captionText = words.length ? words.map(word=>word.text).join(" ") : (subtitleText[index] ?? segment.text);
-      return selectedClips.some(clip => timing.end > clip.start && timing.start < clip.end)
-        ? [{start:timing.start,end:timing.end,text:captionText}]
+      if (words.length) {
+        return words.filter(word => selectedClips.some(clip=>word.end>clip.start&&word.start<clip.end))
+          .map(word=>({start:word.start,end:word.end,text:word.text}));
+      }
+      return selectedClips.some(clip=>timing.end>clip.start&&timing.start<clip.end)
+        ? [{start:timing.start,end:timing.end,text:subtitleText[index] ?? segment.text}]
         : [];
     });
     setExportBusy(true);
@@ -301,11 +304,7 @@ function App() {
           burn_subtitles: burnSubtitles,
           subtitle_preset: subtitlePreset,
           subtitle_style: { font_size: subtitleFontSize, vertical_position: subtitlePosition, outline_width: subtitleOutline, background_opacity: subtitleBackground },
-          subtitle_segments: burnSubtitles ? selectedSubtitles.map(segment => {
-            const index = subtitleSource.indexOf(segment);
-            const timing = index >= 0 ? getSubtitleRange(index, segment) : segment;
-            return { start: timing.start, end: timing.end, text: index >= 0 ? (subtitleText[index] ?? segment.text) : segment.text };
-          }) : []
+          subtitle_segments: burnSubtitles ? selectedSubtitles : []
         })
       });
       const body = await response.json();
