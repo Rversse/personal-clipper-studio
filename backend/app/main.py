@@ -584,8 +584,6 @@ def run_discovery_job(job_id: str) -> None:
             except Exception:
                 # Prosody is supplemental; unavailable audio analysis must not block discovery.
                 audio_features = None
-        if not transcript:
-            raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
         chunks = ai_discovery.split_transcript(transcript)
         if not chunks:
             raise ValueError("Transkrip kosong atau tidak dapat dibagi menjadi bagian analisis.")
