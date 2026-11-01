@@ -39,7 +39,7 @@ jobs:
       - name: Install backend and CPU transcription dependencies from the committed lockfile
         run: |
           python -m pip install "uv==0.13.6"
-          uv sync --system --project backend --extra transcription --extra build --locked
+          uv sync --system --inexact --project backend --extra transcription --extra build --locked
       - name: Build self-contained local API directory
         run: >
           pyinstaller --clean --noconfirm --onedir
