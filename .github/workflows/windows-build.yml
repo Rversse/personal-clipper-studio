@@ -34,6 +34,10 @@ jobs:
           cache-dependency-path: backend/uv.lock
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit Rust dependencies
+        run: cargo audit --file src-tauri/Cargo.lock
       - name: Install frontend dependencies
         run: npm ci
       - name: Install backend and CPU transcription dependencies from the committed lockfile
