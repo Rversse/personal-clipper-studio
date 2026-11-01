@@ -123,7 +123,7 @@ _CONTINUATION_WORDS = {
 
 def _word_starts_continuation(text: str) -> bool:
     cleaned = _CLOSING_PUNCTUATION.sub("", text.strip().lower())
-    match = re.match(r"[\\w'-]+", cleaned)
+    match = re.match(r"[^\W_'-]+", cleaned)
     return bool(match and match.group(0) in _CONTINUATION_WORDS)
 
 
@@ -206,7 +206,10 @@ def _word_opening_signal(
         score -= 5
         reasons.append("confidence timestamp kata rendah")
 
-    if current["word_index"] == 0:
+    is_first_word_in_segment = (
+        previous is None or previous["segment_index"] != current["segment_index"]
+    )
+    if is_first_word_in_segment:
         segment_quality, _ = _opening_signal(segments, current["segment_index"])
         if segment_quality >= 75:
             score += min(7, round((segment_quality - 65) * 0.25))
@@ -246,10 +249,10 @@ def _word_ending_signal(
         score -= 5
         reasons.append("confidence timestamp kata rendah")
 
-    segment_words = [
-        word for word in words if word["segment_index"] == current["segment_index"]
-    ]
-    if segment_words and current["word_index"] == max(word["word_index"] for word in segment_words):
+    is_last_word_in_segment = (
+        following is None or following["segment_index"] != current["segment_index"]
+    )
+    if is_last_word_in_segment:
         segment_quality, _ = _ending_signal(segments, current["segment_index"])
         if segment_quality >= 75:
             score += min(7, round((segment_quality - 65) * 0.25))

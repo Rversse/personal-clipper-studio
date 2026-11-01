@@ -416,3 +416,13 @@ def test_discovery_job_loads_persisted_words_for_candidate_refinement(tmp_path, 
         assert candidate["end_seconds"] == 59.9
         assert "Presisi kata" in candidate["opening_boundary"]
         assert "Presisi kata" in candidate["ending_boundary"]
+
+
+
+def test_word_continuation_detection_handles_standalone_tokens():
+    from app.clip_boundaries import _word_starts_continuation
+
+    assert _word_starts_continuation("Dan")
+    assert _word_starts_continuation("karena")
+    assert _word_starts_continuation("yang,")
+    assert not _word_starts_continuation("dunia.")
