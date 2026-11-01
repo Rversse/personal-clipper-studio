@@ -154,6 +154,10 @@ class ExportCreate(BaseModel):
     crop_x: float = Field(default=0.5, ge=0.0, le=1.0, allow_inf_nan=False)
     crop_y: float = Field(default=0.5, ge=0.0, le=1.0, allow_inf_nan=False)
     audio_volume: float = Field(default=1.0, ge=0.0, le=2.0, allow_inf_nan=False)
+    output_preset: Literal["youtube_shorts", "instagram_reels", "square_feed", "landscape", "custom"] = "youtube_shorts"
+    quality_profile: Literal["balanced", "high", "maximum"] = "balanced"
+    frame_rate: Literal[24, 30, 60] | None = 30
+    normalize_audio: bool = False
 
 
 class ExportResponse(BaseModel):
@@ -164,6 +168,10 @@ class ExportResponse(BaseModel):
     end_seconds: float
     aspect_ratio: str
     output_name: str
+    output_preset: str = "youtube_shorts"
+    quality_profile: str = "balanced"
+    frame_rate: int | None = 30
+    normalize_audio: bool = False
     clip_count: int = 1
     crop_zoom: float = 1.0
     crop_x: float = 0.5
