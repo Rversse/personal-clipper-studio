@@ -18,3 +18,12 @@ Thumbs.db
 build/
 src-tauri/resources/*
 !src-tauri/resources/.gitkeep
+# Local runtime data and generated user content
+.cache/
+models/
+data/
+projects/
+exports/
+logs/
+*.log
+.secrets/
