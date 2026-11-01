@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -22,6 +23,18 @@ def _read_json(url: str) -> dict:
     with urlopen(url, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
+
+
+def _request_json(url: str, method: str, payload: dict | None = None) -> dict:
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"} if body is not None else {},
+        method=method,
+    )
+    with urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 def _stop_process_gracefully(process: subprocess.Popen[str], timeout: float = 15) -> None:
     """Ask the packaged server to stop cleanly, then enforce a bounded fallback."""
@@ -91,6 +104,8 @@ def main() -> int:
         env = os.environ.copy()
         env["PCS_DATA_DIR"] = str(work_dir / "data")
         env["PYTHONUTF8"] = "1"
+        env["PCS_AI_PROVIDER"] = "gemini"
+        env.pop("PCS_GEMINI_API_KEY", None)
         stdout_path = work_dir / "backend.stdout.log"
         stderr_path = work_dir / "backend.stderr.log"
         with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
@@ -152,6 +167,35 @@ def main() -> int:
                 projects = _read_json(f"{base_url}/api/projects")
                 if not any(project.get("id") == created["id"] for project in projects):
                     raise AssertionError("Created project was not returned by the list endpoint.")
+
+                ai_settings_url = f"{base_url}/api/settings/ai"
+                credential_status = _read_json(ai_settings_url)
+                if not credential_status.get("credential_store_available"):
+                    raise AssertionError("Packaged Windows Credential Manager backend is unavailable.")
+                if credential_status.get("configured"):
+                    raise AssertionError("Smoke-test Windows account unexpectedly has a pre-existing Gemini key.")
+
+                smoke_key = "pcs-smoke-" + secrets.token_urlsafe(32)
+                try:
+                    saved = _request_json(
+                        f"{ai_settings_url}/gemini-key",
+                        "PUT",
+                        {"api_key": smoke_key},
+                    )
+                    if not saved.get("configured") or saved.get("source") != "windows_credential_manager":
+                        raise AssertionError("Gemini key was not stored in Windows Credential Manager.")
+                    if smoke_key in json.dumps(saved):
+                        raise AssertionError("Gemini key value was returned by the settings API.")
+                    restored = _read_json(ai_settings_url)
+                    if not restored.get("configured") or restored.get("source") != "windows_credential_manager":
+                        raise AssertionError("Gemini key could not be read back from Windows Credential Manager.")
+                    if smoke_key in json.dumps(restored):
+                        raise AssertionError("Gemini key value was exposed by the settings API.")
+                finally:
+                    _request_json(f"{ai_settings_url}/gemini-key", "DELETE")
+                removed = _read_json(ai_settings_url)
+                if removed.get("configured"):
+                    raise AssertionError("Gemini smoke-test key remained in Windows Credential Manager.")
 
                 _stop_process_gracefully(process)
                 if process.poll() is None:
