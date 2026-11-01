@@ -3,7 +3,73 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import math
+import shutil
 from typing import Callable, Any
+
+WHISPER_MODELS = {
+    "tiny": 75 * 1024**2,
+    "base": 145 * 1024**2,
+    "small": 484 * 1024**2,
+    "medium": 1530 * 1024**2,
+    "large-v3": 3090 * 1024**2,
+    "distil-large-v3": 1530 * 1024**2,
+}
+WHISPER_DISK_RESERVE_BYTES = 512 * 1024**2
+
+
+def _whisper_cache_dir() -> Path:
+    explicit_cache = os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+    if explicit_cache:
+        return Path(explicit_cache).expanduser()
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home).expanduser() / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _available_disk_bytes(path: Path) -> int | None:
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        return shutil.disk_usage(probe).free
+    except OSError:
+        return None
+
+
+def whisper_model_preflight(model_name: str) -> dict[str, Any]:
+    """Inspect the local Hugging Face cache and free space without downloading anything."""
+    if model_name not in WHISPER_MODELS:
+        raise ValueError("Model Whisper tidak dikenal.")
+    cache_dir = _whisper_cache_dir()
+    model_dir = cache_dir / f"models--Systran--faster-whisper-{model_name}"
+    snapshots_dir = model_dir / "snapshots"
+    downloaded = False
+    try:
+        downloaded = any(
+            (snapshot / "model.bin").is_file()
+            for snapshot in snapshots_dir.iterdir()
+            if snapshot.is_dir()
+        )
+    except OSError:
+        downloaded = False
+
+    free_bytes = _available_disk_bytes(cache_dir)
+    estimated_model_bytes = WHISPER_MODELS[model_name]
+    required_bytes = 0 if downloaded else estimated_model_bytes + WHISPER_DISK_RESERVE_BYTES
+    enough_space = True if downloaded else (
+        free_bytes is not None and free_bytes >= required_bytes
+    )
+    return {
+        "model": model_name,
+        "downloaded": downloaded,
+        "cache_configured": cache_dir.exists(),
+        "free_bytes": free_bytes,
+        "estimated_download_bytes": 0 if downloaded else estimated_model_bytes,
+        "required_free_bytes": required_bytes,
+        "disk_space_ok": enough_space,
+        "disk_space_known": free_bytes is not None,
+    }
 
 
 def is_available() -> bool:
@@ -28,6 +94,17 @@ def transcribe_file(
         raise RuntimeError(
             "Whisper belum siap. Install backend[transcription] dan pastikan native runtime/DLL tersedia."
         ) from error
+
+    preflight = whisper_model_preflight(model_name)
+    if not preflight["disk_space_ok"]:
+        required_mb = math.ceil(preflight["required_free_bytes"] / 1024**2)
+        free_bytes = preflight["free_bytes"]
+        free_mb = math.floor(free_bytes / 1024**2) if free_bytes is not None else 0
+        raise RuntimeError(
+            f"Ruang disk tidak cukup untuk model Whisper {model_name}. "
+            f"Perlu sekitar {required_mb} MB ruang kosong; tersedia {free_mb} MB. "
+            "Kosongkan ruang disk atau pilih model yang lebih kecil."
+        )
 
     device = os.environ.get("PCS_WHISPER_DEVICE", "auto")
     compute_type = os.environ.get("PCS_WHISPER_COMPUTE_TYPE", "default")
