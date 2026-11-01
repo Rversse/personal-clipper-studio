@@ -46,7 +46,7 @@ The Windows desktop workflow builds both unsigned NSIS (`.exe`) and MSI installe
 2. Run it with **workflow_dispatch**, or push a change to a pull request targeting `main`.
 3. Download the `personal-clipper-studio-windows` workflow artifact.
 
-The packaged release starts the API at `127.0.0.1:8765` and terminates its child process when the desktop app exits normally. Backend logs are written to the application log directory as `backend.log`.
+The packaged release starts the API at `127.0.0.1:8765` and requests graceful FastAPI shutdown when the desktop app exits; a hard-kill is only used after a bounded timeout. Backend logs are written to the application log directory as `backend.log`.
 
 **FFmpeg and FFprobe must still be installed separately and available on PATH.** They are required for media probing, thumbnails, audio analysis, and video rendering. See [Windows installation notes](WINDOWS_INSTALLATION.md). The bundled Whisper engine runs on CPU; CUDA acceleration is not bundled or guaranteed.
 

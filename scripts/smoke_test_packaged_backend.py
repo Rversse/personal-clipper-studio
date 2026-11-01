@@ -23,6 +23,35 @@ def _read_json(url: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _stop_process_gracefully(process: subprocess.Popen[str], timeout: float = 15) -> None:
+    """Ask the packaged server to stop cleanly, then enforce a bounded fallback."""
+    if process.poll() is not None:
+        if process.returncode != 0:
+            raise RuntimeError(f"Packaged backend exited with non-zero status: {process.returncode}")
+        return
+
+    if process.stdin is not None:
+        try:
+            process.stdin.write("shutdown\n")
+            process.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            process.stdin.close()
+
+    try:
+        exit_code = process.wait(timeout=timeout)
+        if exit_code != 0:
+            raise RuntimeError(f"Packaged backend exited with non-zero status: {exit_code}")
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: python scripts/smoke_test_packaged_backend.py <pcs-api.exe>")
@@ -45,9 +74,11 @@ def main() -> int:
                 [str(executable), "--port", str(port)],
                 cwd=work_dir,
                 env=env,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=stdout,
                 stderr=stderr,
+                text=True,
+                encoding="utf-8",
             )
             base_url = f"http://127.0.0.1:{port}"
             try:
@@ -96,15 +127,15 @@ def main() -> int:
                 if not any(project.get("id") == created["id"] for project in projects):
                     raise AssertionError("Created project was not returned by the list endpoint.")
 
-                print("Packaged backend health, SQLite create/list, and API smoke tests passed.")
+                _stop_process_gracefully(process)
+                if process.poll() is None:
+                    raise RuntimeError("Packaged backend remained alive after graceful shutdown.")
+                print("Packaged backend health, SQLite create/list, and graceful shutdown tests passed.")
             finally:
                 if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=5)
+                    _stop_process_gracefully(process, timeout=5)
+                if process.stdin is not None and not process.stdin.closed:
+                    process.stdin.close()
 
     return 0
 

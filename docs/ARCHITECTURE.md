@@ -14,7 +14,7 @@ Tauri desktop process
         └── AI provider adapters: Gemini / Ollama
 ```
 
-The Windows release workflow builds the FastAPI entry point into a self-contained executable using PyInstaller. Tauri resolves that executable from bundled resources, starts it bound to loopback, captures its output in `backend.log`, and terminates it when the desktop process exits normally. Debug builds continue to use a manually started API process so reload and development tooling remain straightforward.
+The Windows release workflow builds the FastAPI entry point into a self-contained onedir distribution using PyInstaller. Tauri resolves that executable from bundled resources, starts it bound to loopback, captures its output in `backend.log`, and requests a graceful shutdown through the child's stdin when the desktop app exits. The host waits up to 12 seconds for FastAPI's lifespan cleanup before using a hard-kill fallback. Debug builds continue to use a manually started API process so reload and development tooling remain straightforward.
 
 The frontend retries the health endpoint while the service is starting and continues checking for an unexpected service exit. It reloads the project list when the service reconnects.
 

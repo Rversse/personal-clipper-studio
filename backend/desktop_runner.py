@@ -1,10 +1,16 @@
 """Launch the local API from a packaged desktop executable.
 
 The bind host is deliberately fixed to loopback; only the port is configurable so
-the packaged service cannot accidentally be exposed to the local network.
+the packaged service cannot accidentally be exposed to the local network. The
+desktop host requests a graceful shutdown through stdin before using a hard kill.
 """
 from __future__ import annotations
+
 import argparse
+import sys
+import threading
+from typing import TextIO
+
 
 def _port(value: str) -> int:
     try:
@@ -15,18 +21,42 @@ def _port(value: str) -> int:
         raise argparse.ArgumentTypeError("port must be between 1024 and 65535")
     return port
 
+
+def _watch_shutdown(server, input_stream: TextIO | None = None) -> None:
+    """Set Uvicorn's exit flag only for the explicit desktop shutdown command."""
+    stream = input_stream if input_stream is not None else sys.stdin
+    for line in stream:
+        if line.strip().casefold() == "shutdown":
+            server.should_exit = True
+            return
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Personal Clipper Studio local API")
     parser.add_argument("--port", type=_port, default=8765)
     arguments = parser.parse_args(argv)
+
     import uvicorn
-    uvicorn.run(
-        "app.main:app",
-        host="127.0.0.1",
-        port=arguments.port,
-        log_level="info",
-        access_log=False,
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            "app.main:app",
+            host="127.0.0.1",
+            port=arguments.port,
+            log_level="info",
+            access_log=False,
+            timeout_graceful_shutdown=8,
+        )
     )
+    shutdown_watcher = threading.Thread(
+        target=_watch_shutdown,
+        args=(server,),
+        name="pcs-shutdown-watcher",
+        daemon=True,
+    )
+    shutdown_watcher.start()
+    server.run()
+
 
 if __name__ == "__main__":
     main()

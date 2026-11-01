@@ -83,7 +83,7 @@ Install a recent FFmpeg build and make sure `ffmpeg` is available on PATH. The E
 
 ## Packaged Windows desktop runtime
 
-The Windows desktop workflow builds `desktop_runner.py` into a PyInstaller onedir distribution and includes the CPU `faster-whisper` runtime. Tauri starts `resources/pcs-api/pcs-api.exe` as a managed child process at `127.0.0.1:8765` in release builds and terminates it on normal application exit. The onedir layout keeps the service as one directly managed process, avoiding the extra bootloader/worker process used by PyInstaller onefile mode.
+The Windows desktop workflow builds `desktop_runner.py` into a PyInstaller onedir distribution and includes the CPU `faster-whisper` runtime. Tauri starts `resources/pcs-api/pcs-api.exe` as a managed child process at `127.0.0.1:8765` in release builds. On normal application exit, Tauri sends a shutdown command over the child's stdin, allowing FastAPI's lifespan cleanup to run; a bounded hard-kill is used only if graceful shutdown times out. The onedir layout keeps the service as one directly managed process, avoiding the extra bootloader/worker process used by PyInstaller onefile mode.
 
 The packaged-backend smoke test starts the generated executable on a temporary loopback port, verifies the health response, creates and lists a SQLite project, and confirms child-process termination. Debug builds still require a separately started API process.
 

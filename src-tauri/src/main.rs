@@ -1,14 +1,38 @@
 use std::{
     fs::{self, OpenOptions},
+    io::Write,
     net::TcpListener,
     process::{Child, Command, Stdio},
     sync::Mutex,
+    thread,
+    time::{Duration, Instant},
 };
 
 use tauri::{path::BaseDirectory, Manager};
 
 #[cfg(target_os = "windows")]
 struct BackendProcess(Mutex<Option<Child>>);
+
+#[cfg(target_os = "windows")]
+fn shutdown_backend(child: &mut Child) {
+    // Let FastAPI run its lifespan cleanup before the bounded hard-kill fallback.
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = stdin.write_all(b"shutdown\n");
+        let _ = stdin.flush();
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
+            Ok(None) | Err(_) => break,
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 fn main() {
     let app = tauri::Builder::default()
@@ -49,7 +73,7 @@ fn main() {
                 command
                     .arg("--port")
                     .arg("8765")
-                    .stdin(Stdio::null())
+                    .stdin(Stdio::piped())
                     .stdout(Stdio::from(stdout))
                     .stderr(Stdio::from(stderr));
 
@@ -72,8 +96,7 @@ fn main() {
             if let Some(state) = app_handle.try_state::<BackendProcess>() {
                 let mut guard = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 if let Some(mut child) = guard.take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    shutdown_backend(&mut child);
                 }
             }
         }
