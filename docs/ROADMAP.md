@@ -68,7 +68,8 @@
 - [x] Gemini API key configuration UI with Windows Credential Manager storage, environment-variable precedence, safe status reporting, replace/delete controls, and read-only HTTPS model-access test
 - [x] Windows packaged-runtime smoke test for Credential Manager availability and secret save/read/delete round-trip
 - [x] Export error recovery, queued/active cancellation, and graceful desktop-shutdown cancellation of active FFmpeg renders with regression coverage
-- [x] Backend cancellation API and cooperative cancellation for transcription/discovery jobs; [ ] retry controls and user-facing recovery actions
+- [x] Backend cancellation API and cooperative cancellation for transcription/discovery jobs, including shutdown persistence
+- [x] AI Workspace cancel controls and retry actions for failed or cancelled transcription/discovery jobs
 - [x] Windows NSIS/MSI CI packaging with a PyInstaller-bundled FastAPI service, packaged-runtime health/SQLite smoke test, and silent installer install/launch/API/SQLite/uninstall validation on a hosted Windows runner
 - [x] Tauri-managed Windows backend startup/shutdown, loopback binding, port-collision guard, and persistent backend log
 - [ ] Install and launch MSI/NSIS on a clean physical Windows machine; verify FFmpeg, CPU Whisper model download, and optional GPU/NVENC behavior
