@@ -509,6 +509,9 @@ def test_execute_reports_live_progress_while_ffmpeg_runs(monkeypatch):
         def kill(self):
             self.returncode = -9
 
+        def communicate(self, timeout=None):
+            return ("", "")
+
     monkeypatch.setattr(rendering.subprocess, "Popen", lambda *args, **kwargs: FakeProcess(**kwargs))
     updates = []
     rendering._execute(["ffmpeg", "-progress", "pipe:1"], 2.0, updates.append)
@@ -594,3 +597,57 @@ def test_execute_honors_pre_cancelled_control(monkeypatch):
         pass
     else:
         raise AssertionError("Pre-cancelled render must stop before spawning FFmpeg")
+
+
+
+def test_execute_terminates_running_process_when_cancelled(monkeypatch):
+    import io
+    import threading
+    import time
+
+    spawned = threading.Event()
+
+    class FakeProcess:
+        def __init__(self, **kwargs):
+            self.stdout = io.StringIO("")
+            self.returncode = None
+            self.terminated = False
+            spawned.set()
+        def poll(self):
+            return self.returncode
+        def wait(self, timeout=None):
+            if self.returncode is None and timeout is not None:
+                time.sleep(min(timeout, 0.01))
+            return self.returncode
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+        def kill(self):
+            self.returncode = -9
+
+    process_box = []
+    def spawn(*args, **kwargs):
+        process = FakeProcess(**kwargs)
+        process_box.append(process)
+        return process
+
+    monkeypatch.setattr(rendering.subprocess, "Popen", spawn)
+    control = rendering.RenderControl()
+    errors = []
+    worker = threading.Thread(
+        target=lambda: _capture_render_error(errors, lambda: rendering._execute(["ffmpeg"], 10, None, control))
+    )
+    worker.start()
+    assert spawned.wait(timeout=2)
+    control.cancel()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert process_box[0].terminated
+    assert errors and isinstance(errors[0], rendering.RenderCancelled)
+
+
+def _capture_render_error(errors, operation):
+    try:
+        operation()
+    except Exception as error:
+        errors.append(error)
