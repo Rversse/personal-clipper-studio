@@ -12,7 +12,7 @@ type Project = { id: string; name: string; description: string; created_at: stri
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
 type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
 type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: number; crop_y?: number; audio_volume?: number };
-type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
+type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; output_preset?:string; quality_profile?:string; frame_rate?:number|null; normalize_audio?:boolean; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string}[] };
 
 const navItems = [
@@ -62,6 +62,10 @@ function App() {
   const [editStart, setEditStart] = useState(0);
   const [editEnd, setEditEnd] = useState(0);
   const [aspectRatio, setAspectRatio] = useState("9:16");
+  const [outputPreset, setOutputPreset] = useState("youtube_shorts");
+  const [qualityProfile, setQualityProfile] = useState("balanced");
+  const [frameRate, setFrameRate] = useState<number | null>(30);
+  const [normalizeAudio, setNormalizeAudio] = useState(false);
   const [cropZoom, setCropZoom] = useState(1);
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
@@ -280,6 +284,7 @@ function App() {
             audio_volume: clip.audio_volume ?? audioVolume
           })),
           aspect_ratio: aspectRatio,
+          output_preset: outputPreset, quality_profile: qualityProfile, frame_rate: frameRate, normalize_audio: normalizeAudio,
           crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: audioVolume,
           burn_subtitles: burnSubtitles,
           subtitle_preset: subtitlePreset,
@@ -395,10 +400,14 @@ function App() {
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
-        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; subtitleTiming?: Record<number,{start:number;end:number}>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; selectedSequenceIndex?: number | null; cropZoom?: number; cropX?: number; cropY?: number; audioVolume?: number; subtitleFontSize?: number; subtitlePosition?: number; subtitleOutline?: number; subtitleBackground?: number };
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; outputPreset?: string; qualityProfile?: string; frameRate?: number | null; normalizeAudio?: boolean; texts?: Record<number,string>; subtitleTiming?: Record<number,{start:number;end:number}>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; selectedSequenceIndex?: number | null; cropZoom?: number; cropX?: number; cropY?: number; audioVolume?: number; subtitleFontSize?: number; subtitlePosition?: number; subtitleOutline?: number; subtitleBackground?: number };
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
+        setOutputPreset(parsed.outputPreset ?? "youtube_shorts");
+        setQualityProfile(["balanced","high","maximum"].includes(parsed.qualityProfile ?? "") ? parsed.qualityProfile! : "balanced");
+        setFrameRate(parsed.frameRate === null ? null : [24,30,60].includes(parsed.frameRate ?? 30) ? parsed.frameRate ?? 30 : 30);
+        setNormalizeAudio(parsed.normalizeAudio ?? false);
         setSubtitleText(parsed.texts ?? {});
         setSubtitleTiming(parsed.subtitleTiming ?? {});
         setSubtitlePreset(parsed.preset ?? "clean");
@@ -427,6 +436,7 @@ function App() {
         setSplitPoints([]);
         setClipSequence([]);
         setAspectRatio("9:16");
+        setOutputPreset("youtube_shorts"); setQualityProfile("balanced"); setFrameRate(30); setNormalizeAudio(false);
         setCropZoom(1); setCropX(0.5); setCropY(0.5);
         setSubtitlePreset("clean");
         setSubtitleFontSize(52); setSubtitlePosition(8); setSubtitleOutline(2); setSubtitleBackground(0);
@@ -437,6 +447,7 @@ function App() {
       setSubtitleText({});
       setSubtitleTiming({});
       setAudioVolume(1);
+      setOutputPreset("youtube_shorts"); setQualityProfile("balanced"); setFrameRate(30); setNormalizeAudio(false);
       setSubtitleFontSize(52); setSubtitlePosition(8); setSubtitleOutline(2); setSubtitleBackground(0);
       setSplitPoints([]);
       setClipSequence([]);
@@ -460,7 +471,7 @@ function App() {
   function saveEditorDraft() {
     if (!aiMediaId || editEnd <= editStart) return;
     localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
-      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, subtitleTiming, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, selectedSequenceIndex, cropZoom, cropX, cropY, audioVolume, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
+      start: editStart, end: editEnd, ratio: aspectRatio, outputPreset, qualityProfile, frameRate, normalizeAudio, texts: subtitleText, subtitleTiming, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, selectedSequenceIndex, cropZoom, cropX, cropY, audioVolume, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
     }));
     setEditorSaved(true);
     window.setTimeout(() => setEditorSaved(false), 2400);
@@ -936,7 +947,26 @@ function App() {
                 <aside className="editor-settings">
                   <div className="editor-panel-head"><div><strong>Clip settings</strong><small>Basic edit controls</small></div></div>
                   <label>AI candidate<select value={editorCandidateId} onChange={e=>{setEditorCandidateId(e.target.value);if(!e.target.value){setEditStart(0);setEditEnd(media.find(item=>item.id===aiMediaId)?.duration ?? transcription?.duration ?? 0);}}}><option value="">Manual / full source</option>{(discovery?.candidates ?? []).map(c=><option key={c.id} value={c.id}>{c.title} · {c.score}/100</option>)}</select></label>
-                  <label>Aspect ratio<select value={aspectRatio} onChange={e=>setAspectRatio(e.target.value)}><option value="9:16">9:16 · Shorts / Reels</option><option value="16:9">16:9 · Landscape</option><option value="1:1">1:1 · Square</option></select></label>
+                  <div className="export-profile-controls">
+                    <div className="export-profile-heading"><strong>Export profile</strong><small>Platform framing and render quality</small></div>
+                    <label>Platform preset<select value={outputPreset} onChange={event=>{
+                      const preset=event.target.value;
+                      setOutputPreset(preset);
+                      if(preset==="youtube_shorts"||preset==="instagram_reels")setAspectRatio("9:16");
+                      else if(preset==="square_feed")setAspectRatio("1:1");
+                      else if(preset==="landscape")setAspectRatio("16:9");
+                    }}>
+                      <option value="youtube_shorts">YouTube Shorts · 9:16</option>
+                      <option value="instagram_reels">Instagram Reels · 9:16</option>
+                      <option value="square_feed">Square feed · 1:1</option>
+                      <option value="landscape">Landscape · 16:9</option>
+                      <option value="custom">Custom</option>
+                    </select></label>
+                    {outputPreset==="custom" && <label>Aspect ratio<select value={aspectRatio} onChange={event=>setAspectRatio(event.target.value)}><option value="9:16">9:16 · Vertical</option><option value="16:9">16:9 · Landscape</option><option value="1:1">1:1 · Square</option></select></label>}
+                    <label>Encoding quality<select value={qualityProfile} onChange={event=>setQualityProfile(event.target.value)}><option value="balanced">Balanced · recommended</option><option value="high">High quality</option><option value="maximum">Maximum quality · slower</option></select></label>
+                    <label>Frame rate<select value={frameRate===null?"source":String(frameRate)} onChange={event=>setFrameRate(event.target.value==="source"?null:Number(event.target.value))}><option value="source">Follow source</option><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
+                    <label className="normalize-audio-toggle"><input type="checkbox" checked={normalizeAudio} onChange={event=>setNormalizeAudio(event.target.checked)}/><span><b>Normalize audio</b><small>EBU loudness target: −16 LUFS / −1.5 dBTP</small></span></label>
+                  </div>
                   <div className="crop-controls">
                     <div className="crop-title"><strong>Crop &amp; reposition</strong><button type="button" onClick={()=>updateCropFraming({crop_zoom:1,crop_x:0.5,crop_y:0.5})}>Reset</button></div>
                     <label>Zoom <output>{cropZoom.toFixed(2)}×</output><input type="range" min="1" max="3" step="0.05" value={cropZoom} onChange={e=>updateCropFraming({crop_zoom:Number(e.target.value)})}/></label>
@@ -979,7 +1009,7 @@ function App() {
                 {aiMediaId && media.some(item=>item.id===aiMediaId) ? <div className="export-config"><span>{media.find(item=>item.id===aiMediaId)?.original_name}</span><span>{clipSequence.length ? clipSequence.length + " clips in sequence" : formatTimestamp(editStart) + " – " + formatTimestamp(editEnd)} · {aspectRatio}</span><span>{burnSubtitles ? "Burn-in " + visibleSubtitleSegments.length + " subtitle · " + subtitlePreset : "Subtitle burn-in off"}</span><button className="primary-button" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting..." : "Render MP4"} <ArrowDownToLine size={14}/></button></div> : <button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Pilih source di AI Workspace <ArrowRight size={14}/></button>}
               </div>
               <div className="export-list-heading"><div><h3>Export history</h3><p>100 pekerjaan terbaru dari perangkat ini</p></div><span>{exportJobs.length} jobs</span></div>
-              {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{job.clip_count > 1 ? job.clip_count + " clips in sequence" : formatTimestamp(job.start_seconds) + " – " + formatTimestamp(job.end_seconds)} · {job.aspect_ratio} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}{["queued","processing"].includes(job.status) && <button className="secondary-button export-cancel" onClick={async()=>{try{const response=await fetch(`${API_BASE}/api/exports/${job.id}/cancel`,{method:"POST"});const body=await response.json();if(!response.ok)throw new Error(body.detail??"Gagal membatalkan export.");setExportJobs(previous=>previous.map(item=>item.id===job.id?body as ExportJob:item));}catch(e){setError(e instanceof Error?e.message:"Gagal membatalkan export.");}}}>Cancel export</button>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
+              {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{job.clip_count > 1 ? job.clip_count + " clips in sequence" : formatTimestamp(job.start_seconds) + " – " + formatTimestamp(job.end_seconds)} · {job.output_preset ?? job.aspect_ratio} · {job.quality_profile ?? "balanced"} · {job.frame_rate ? job.frame_rate+" FPS" : "Source FPS"} · {job.normalize_audio ? "Normalized audio" : "Original loudness"} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}{["queued","processing"].includes(job.status) && <button className="secondary-button export-cancel" onClick={async()=>{try{const response=await fetch(`${API_BASE}/api/exports/${job.id}/cancel`,{method:"POST"});const body=await response.json();if(!response.ok)throw new Error(body.detail??"Gagal membatalkan export.");setExportJobs(previous=>previous.map(item=>item.id===job.id?body as ExportJob:item));}catch(e){setError(e instanceof Error?e.message:"Gagal membatalkan export.");}}}>Cancel export</button>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
             </section>
           ) : active === "Projects" ? (
             <section className="projects-view">
