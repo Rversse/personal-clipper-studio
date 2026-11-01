@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, AudioLines, Clapperboard,
   Clock3, FolderOpen, Gauge, Layers3, Plus, Settings2, Sparkles, Upload,
@@ -6,6 +7,18 @@ import {
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
+
+let apiSessionTokenPromise: Promise<string | null> | null = null;
+
+async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (!apiSessionTokenPromise) {
+    apiSessionTokenPromise = invoke<string>("get_local_api_token").catch(() => null);
+  }
+  const token = await apiSessionTokenPromise;
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
+}
 
 type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
@@ -163,7 +176,7 @@ function App() {
 
   const loadProjects = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/projects`);
+      const response = await apiFetch(`${API_BASE}/api/projects`);
       if (!response.ok) throw new Error("Gagal mengambil daftar proyek.");
       setProjects(await response.json() as Project[]);
       setHealth("online");
@@ -176,7 +189,7 @@ function App() {
     setDiagnosticsLoading(true);
     setDiagnosticsError("");
     try {
-      const response = await fetch(`${API_BASE}/api/diagnostics?whisper_model=${encodeURIComponent(whisperModel)}`);
+      const response = await apiFetch(`${API_BASE}/api/diagnostics?whisper_model=${encodeURIComponent(whisperModel)}`);
       if (!response.ok) throw new Error("Tidak dapat membaca pemeriksaan software dari local service.");
       setRuntimeDiagnostics(await response.json() as RuntimeDiagnostics);
     } catch (e) {
@@ -194,7 +207,7 @@ function App() {
     setGeminiSettingsLoading(true);
     setGeminiKeyError("");
     try {
-      const response = await fetch(`${API_BASE}/api/settings/ai`);
+      const response = await apiFetch(`${API_BASE}/api/settings/ai`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "Gagal membaca status Gemini API key.");
       setGeminiSettings(payload as GeminiSettings);
@@ -214,7 +227,7 @@ function App() {
     setGeminiKeyError("");
     setGeminiKeyMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-key`, {
+      const response = await apiFetch(`${API_BASE}/api/settings/ai/gemini-key`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_key: geminiKeyInput })
@@ -238,7 +251,7 @@ function App() {
     setGeminiKeyError("");
     setGeminiKeyMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-key`, { method: "DELETE" });
+      const response = await apiFetch(`${API_BASE}/api/settings/ai/gemini-key`, { method: "DELETE" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "Gagal menghapus Gemini API key.");
       setGeminiSettings(payload as GeminiSettings);
@@ -257,7 +270,7 @@ function App() {
     setGeminiKeyError("");
     setGeminiKeyMessage("");
     try {
-      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-test`, { method: "POST" });
+      const response = await apiFetch(`${API_BASE}/api/settings/ai/gemini-test`, { method: "POST" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || "Uji koneksi Gemini gagal.");
       if (payload.success) setGeminiKeyMessage(payload.message || "Koneksi Gemini berhasil.");
@@ -272,7 +285,7 @@ function App() {
   const loadMedia = useCallback(async (project: Project) => {
     setLoading(true); setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/projects/${project.id}/media`);
+      const response = await apiFetch(`${API_BASE}/api/projects/${project.id}/media`);
       if (!response.ok) throw new Error("Gagal mengambil media proyek.");
       setMedia(await response.json() as Media[]);
     } catch (e) {
@@ -290,7 +303,7 @@ function App() {
   async function cancelTranscription() {
     if (!transcription) return;
     try {
-      const response = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}/cancel`, { method: "POST" });
+      const response = await apiFetch(`${API_BASE}/api/transcriptions/${transcription.id}/cancel`, { method: "POST" });
       const body = await response.json();
       if (!response.ok) throw new Error(body.detail ?? "Gagal membatalkan transkripsi.");
       setTranscription(previous => previous ? { ...previous, ...body } : body as Transcription);
@@ -302,7 +315,7 @@ function App() {
   async function cancelDiscovery() {
     if (!discovery) return;
     try {
-      const response = await fetch(`${API_BASE}/api/discovery/${discovery.id}/cancel`, { method: "POST" });
+      const response = await apiFetch(`${API_BASE}/api/discovery/${discovery.id}/cancel`, { method: "POST" });
       const body = await response.json();
       if (!response.ok) throw new Error(body.detail ?? "Gagal membatalkan AI discovery.");
       setDiscovery(body as Discovery);
@@ -321,11 +334,11 @@ function App() {
     let cancelled = false;
     const restoreLatestJobs = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/transcriptions/latest`);
+        const response = await apiFetch(`${API_BASE}/api/media/${aiMediaId}/transcriptions/latest`);
         if (response.ok) {
           const status = await response.json() as Transcription;
           if (status.status === "completed") {
-            const detail = await fetch(`${API_BASE}/api/transcriptions/${status.id}`);
+            const detail = await apiFetch(`${API_BASE}/api/transcriptions/${status.id}`);
             if (detail.ok && !cancelled) setTranscription(await detail.json() as Transcription);
             else if (!cancelled) setTranscription(status);
           } else if (!cancelled) {
@@ -334,7 +347,7 @@ function App() {
         }
       } catch { /* No previous transcription is a normal first-run state. */ }
       try {
-        const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/discovery/latest`);
+        const response = await apiFetch(`${API_BASE}/api/media/${aiMediaId}/discovery/latest`);
         if (response.ok && !cancelled) setDiscovery(await response.json() as Discovery);
       } catch { /* No previous discovery is a normal first-run state. */ }
     };
@@ -348,12 +361,12 @@ function App() {
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}/status`);
+        const response = await apiFetch(`${API_BASE}/api/transcriptions/${transcription.id}/status`);
         if (!response.ok) throw new Error("Gagal memeriksa status transkripsi.");
         const status = await response.json() as Transcription;
         if (cancelled) return;
         if (status.status === "completed") {
-          const detail = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}`);
+          const detail = await apiFetch(`${API_BASE}/api/transcriptions/${transcription.id}`);
           if (cancelled) return;
           setTranscription(detail.ok ? await detail.json() as Transcription : status);
         } else {
@@ -376,7 +389,7 @@ function App() {
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/discovery/${discovery.id}`);
+        const response = await apiFetch(`${API_BASE}/api/discovery/${discovery.id}`);
         if (!response.ok) throw new Error("Gagal memeriksa status analisis AI.");
         const result = await response.json() as Discovery;
         if (cancelled) return;
@@ -394,7 +407,7 @@ function App() {
 
   const loadExports = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/exports`);
+      const response = await apiFetch(`${API_BASE}/api/exports`);
       if (response.ok) setExportJobs(await response.json() as ExportJob[]);
     } catch { /* Export history remains available when the local API reconnects. */ }
   }, []);
@@ -428,7 +441,7 @@ function App() {
     setExportBusy(true);
     setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/exports`, {
+      const response = await apiFetch(`${API_BASE}/api/media/${aiMediaId}/exports`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -468,7 +481,7 @@ function App() {
 
     const checkHealth = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/health`, { signal: controller.signal });
+        const response = await apiFetch(`${API_BASE}/api/health`, { signal: controller.signal });
         if (!response.ok) throw new Error("Local service health check failed.");
         if (!connected) void loadProjects();
         connected = true;
@@ -496,7 +509,7 @@ function App() {
     if (!projectName.trim()) return;
     setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/projects`, {
+      const response = await apiFetch(`${API_BASE}/api/projects`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: projectName.trim(), description: projectDescription.trim() })
       });
@@ -512,7 +525,7 @@ function App() {
     setUploading(true); setUploadProgress(`Mengimpor ${file.name}...`); setError("");
     const form = new FormData(); form.append("file", file);
     try {
-      const response = await fetch(`${API_BASE}/api/projects/${selected.id}/media`, { method: "POST", body: form });
+      const response = await apiFetch(`${API_BASE}/api/projects/${selected.id}/media`, { method: "POST", body: form });
       if (!response.ok) {
         const body = await response.json();
         throw new Error(body.detail ?? "Import video gagal.");
@@ -529,7 +542,7 @@ function App() {
     if (!aiMediaId) return;
     setAiBusy(true); setError(""); setDiscovery(null); setTranscription(null);
     try {
-      const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/transcription`, {
+      const response = await apiFetch(`${API_BASE}/api/media/${aiMediaId}/transcription`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model_name: whisperModel, language: whisperLanguage || null })
@@ -546,7 +559,7 @@ function App() {
     if (!aiMediaId || !transcription || transcription.status !== "completed") return;
     setAiBusy(true); setError(""); setDiscovery(null);
     try {
-      const response = await fetch(`${API_BASE}/api/media/${aiMediaId}/discovery`, {
+      const response = await apiFetch(`${API_BASE}/api/media/${aiMediaId}/discovery`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -825,7 +838,7 @@ function App() {
     const key=wordKey(segment.id,wordIndex);
     setWordBusy(key);
     try {
-      const response=await fetch(`${API_BASE}/api/transcriptions/${requestTranscriptionId}/segments/${segment.id}/words/${wordIndex}`,{
+      const response=await apiFetch(`${API_BASE}/api/transcriptions/${requestTranscriptionId}/segments/${segment.id}/words/${wordIndex}`,{
         method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)
       });
       const result=await response.json();
@@ -1389,7 +1402,7 @@ function App() {
                 {aiMediaId && media.some(item=>item.id===aiMediaId) ? <div className="export-config"><span>{media.find(item=>item.id===aiMediaId)?.original_name}</span><span>{clipSequence.length ? clipSequence.length + " clips in sequence" : formatTimestamp(editStart) + " – " + formatTimestamp(editEnd)} · {aspectRatio}</span><span>{burnSubtitles ? "Burn-in " + visibleSubtitleSegments.length + " subtitle · " + subtitlePreset : "Subtitle burn-in off"}</span><button className="primary-button" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting..." : "Render MP4"} <ArrowDownToLine size={14}/></button></div> : <button className="subtle-button" onClick={()=>setActive("AI Workspace")}>Pilih source di AI Workspace <ArrowRight size={14}/></button>}
               </div>
               <div className="export-list-heading"><div><h3>Export history</h3><p>100 pekerjaan terbaru dari perangkat ini</p></div><span>{exportJobs.length} jobs</span></div>
-              {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{job.clip_count > 1 ? job.clip_count + " clips in sequence" : formatTimestamp(job.start_seconds) + " – " + formatTimestamp(job.end_seconds)} · {job.output_preset ?? job.aspect_ratio} · {job.quality_profile ?? "balanced"} · {job.frame_rate ? job.frame_rate+" FPS" : "Source FPS"} · {job.normalize_audio ? "Normalized audio" : "Original loudness"} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}{["queued","processing"].includes(job.status) && <button className="secondary-button export-cancel" onClick={async()=>{try{const response=await fetch(`${API_BASE}/api/exports/${job.id}/cancel`,{method:"POST"});const body=await response.json();if(!response.ok)throw new Error(body.detail??"Gagal membatalkan export.");setExportJobs(previous=>previous.map(item=>item.id===job.id?body as ExportJob:item));}catch(e){setError(e instanceof Error?e.message:"Gagal membatalkan export.");}}}>Cancel export</button>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
+              {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{job.clip_count > 1 ? job.clip_count + " clips in sequence" : formatTimestamp(job.start_seconds) + " – " + formatTimestamp(job.end_seconds)} · {job.output_preset ?? job.aspect_ratio} · {job.quality_profile ?? "balanced"} · {job.frame_rate ? job.frame_rate+" FPS" : "Source FPS"} · {job.normalize_audio ? "Normalized audio" : "Original loudness"} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}{["queued","processing"].includes(job.status) && <button className="secondary-button export-cancel" onClick={async()=>{try{const response=await apiFetch(`${API_BASE}/api/exports/${job.id}/cancel`,{method:"POST"});const body=await response.json();if(!response.ok)throw new Error(body.detail??"Gagal membatalkan export.");setExportJobs(previous=>previous.map(item=>item.id===job.id?body as ExportJob:item));}catch(e){setError(e instanceof Error?e.message:"Gagal membatalkan export.");}}}>Cancel export</button>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
             </section>
           ) : active === "Settings" ? (
             <section className="runtime-settings">
