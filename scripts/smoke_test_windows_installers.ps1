@@ -47,19 +47,29 @@ function Get-UninstallEntries {
     }
 }
 
+function Normalize-RegistryPath {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return "" }
+    $expanded = [Environment]::ExpandEnvironmentVariables(([string]$Value).Trim())
+    return $expanded.Trim().Trim('"')
+}
+
 function Find-InstalledApp {
     $entries = @(Get-UninstallEntries)
     $candidates = [System.Collections.Generic.List[string]]::new()
     foreach ($entry in $entries) {
         $locationProperty = $entry.PSObject.Properties["InstallLocation"]
         if ($null -ne $locationProperty -and $locationProperty.Value) {
-            foreach ($name in $ExecutableNames) {
-                $candidates.Add((Join-Path ([string]$locationProperty.Value) $name))
+            $installLocation = Normalize-RegistryPath $locationProperty.Value
+            if ($installLocation) {
+                foreach ($name in $ExecutableNames) {
+                    $candidates.Add((Join-Path $installLocation $name))
+                }
             }
         }
         $iconProperty = $entry.PSObject.Properties["DisplayIcon"]
         if ($null -ne $iconProperty -and $iconProperty.Value) {
-            $iconPath = ([string]$iconProperty.Value -split ",", 2)[0].Trim().Trim('"')
+            $iconPath = Normalize-RegistryPath (([string]$iconProperty.Value -split ",", 2)[0])
             if ($iconPath) { $candidates.Add($iconPath) }
         }
     }
