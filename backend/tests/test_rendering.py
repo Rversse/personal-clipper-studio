@@ -307,10 +307,16 @@ def test_render_sequence_renders_in_order_and_cleans_intermediates(tmp_path, mon
     subtitle_style = {"font_size": 68, "vertical_position": 10, "outline_width": 3.5, "background_opacity": 35}
     result = rendering.render_sequence(
         source, destination,
-        [{"start": 30, "end": 40}, {"start": 5, "end": 15}],
+        [
+            {"start": 30, "end": 40, "crop_zoom": 2.0, "crop_x": 0.2, "crop_y": 0.7},
+            {"start": 5, "end": 15, "crop_zoom": 1.25, "crop_x": 0.8, "crop_y": 0.3},
+        ],
         "9:16", progress=progress_values.append, subtitle_style=subtitle_style,
     )
     assert [(item[0], item[1]) for item in calls] == [(30, 40), (5, 15)]
+    assert [(item[2]["crop_zoom"], item[2]["crop_x"], item[2]["crop_y"]) for item in calls] == [
+        (2.0, 0.2, 0.7), (1.25, 0.8, 0.3)
+    ]
     assert result["encoder"] == "libx264"
     assert destination.is_file()
     assert progress_values[-1] == 1.0
@@ -359,8 +365,8 @@ def test_export_api_persists_ordered_clip_sequence(tmp_path, monkeypatch):
             ).fetchone()
         import json
         assert json.loads(row["clip_segments"]) == [
-            {"start": 30.0, "end": 40.0},
-            {"start": 5.0, "end": 15.0},
+            {"start": 30.0, "end": 40.0, "crop_zoom": 1.0, "crop_x": 0.5, "crop_y": 0.5},
+            {"start": 5.0, "end": 15.0, "crop_zoom": 1.0, "crop_x": 0.5, "crop_y": 0.5},
         ]
         assert row["start_seconds"] == 5
         assert row["end_seconds"] == 40
@@ -655,3 +661,45 @@ def _capture_render_error(errors, operation):
         operation()
     except Exception as error:
         errors.append(error)
+
+
+def test_export_api_persists_per_clip_crop_and_uses_global_fallback(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 5, "end_seconds": 40,
+                "crop_zoom": 1.4, "crop_x": 0.35, "crop_y": 0.65,
+                "clip_segments": [
+                    {"start": 30, "end": 40, "crop_zoom": 2.2, "crop_x": 0.1, "crop_y": 0.9},
+                    {"start": 5, "end": 15},
+                ],
+            },
+        )
+        assert response.status_code == 202
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT clip_segments FROM export_jobs WHERE id=?", (response.json()["id"],)
+            ).fetchone()
+        import json
+        assert json.loads(row["clip_segments"]) == [
+            {"start": 30.0, "end": 40.0, "crop_zoom": 2.2, "crop_x": 0.1, "crop_y": 0.9},
+            {"start": 5.0, "end": 15.0, "crop_zoom": 1.4, "crop_x": 0.35, "crop_y": 0.65},
+        ]
+
+
+def test_render_sequence_rejects_invalid_per_clip_crop():
+    source = Path("unused-source.mp4")
+    try:
+        rendering.render_sequence(
+            source, Path("unused-output.mp4"),
+            [{"start": 0, "end": 5, "crop_zoom": 3.5}], "9:16",
+        )
+    except rendering.RenderError as error:
+        assert "crop" in str(error).lower()
+    else:
+        raise AssertionError("Out-of-range per-clip crop must be rejected")
