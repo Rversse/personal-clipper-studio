@@ -747,7 +747,7 @@ function App() {
                             const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
                             const left=offset/timelineTotalDuration*100;
                             const width=(clip.end-clip.start)/timelineTotalDuration*100;
-                            return <div key={String(clip.start)+"-"+String(clip.end)+"-"+index}
+                            return <div key={"timeline-video-"+index}
                               className={"multitrack-clip video-clip"+(timelineSelectedIndex===index?" selected":"")+(draggedTimelineIndex===index?" dragging":"")}
                               style={{left:left+"%",width:width+"%"}}
                               draggable={clipSequence.length>1}
@@ -786,12 +786,14 @@ function App() {
                             return timelineTranscriptSegments.filter(segment=>segment.end>clip.start&&segment.start<clip.end).map((segment,segmentIndex)=>{
                               const start=Math.max(segment.start,clip.start);
                               const end=Math.min(segment.end,clip.end);
-                              return <button type="button" key={"caption-"+index+"-"+segmentIndex+"-"+start}
+                              const sourceSegmentIndex=timelineTranscriptSegments.indexOf(segment);
+                              const captionText=subtitleText[sourceSegmentIndex] ?? segment.text;
+                              return <button type="button" key={"caption-"+index+"-"+segmentIndex}
                                 className="timeline-caption-clip"
                                 style={{left:((offset+start-clip.start)/timelineTotalDuration*100)+"%",width:((end-start)/timelineTotalDuration*100)+"%"}}
-                                title={segment.text}
-                                onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(start);}}>
-                                {segment.text}
+                                title={captionText}
+                                onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(start);}}>
+                                {captionText}
                               </button>;
                             });
                           })}
