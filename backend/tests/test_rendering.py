@@ -671,6 +671,35 @@ def test_render_control_kills_attached_process():
         raise AssertionError("Cancelled control must reject continued work")
 
 
+def test_cancel_all_controls_terminates_every_active_render():
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+        def poll(self):
+            return self.returncode
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+        def wait(self, timeout=None):
+            return self.returncode
+        def kill(self):
+            self.returncode = -9
+
+    controls = [rendering.register_control(f"shutdown-{index}") for index in range(2)]
+    processes = [FakeProcess() for _ in controls]
+    try:
+        for control, process in zip(controls, processes):
+            control.attach(process)
+
+        assert rendering.cancel_all_controls() == 2
+        assert all(process.terminated for process in processes)
+        assert all(control._cancelled.is_set() for control in controls)
+    finally:
+        for index in range(len(controls)):
+            rendering.unregister_control(f"shutdown-{index}")
+
+
 def test_execute_honors_pre_cancelled_control(monkeypatch):
     control = rendering.RenderControl()
     control.cancel()
@@ -708,6 +737,36 @@ def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
         assert client.post(f"/api/exports/{job_id}/cancel").status_code == 409
+
+
+def test_export_dequeued_during_shutdown_is_cancelled_before_render(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 20},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+
+        main_module._EXPORT_WORKER_STOP.set()
+        main_module.run_export_job(
+            job_id,
+            str(database.MEDIA_DIR / "source.mp4"),
+            str(database.EXPORT_DIR / response.json()["output_name"]),
+        )
+
+        with database.get_connection() as connection:
+            job = connection.execute(
+                "SELECT status,error FROM export_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+        assert job["status"] == "cancelled"
+        assert "dibatalkan" in job["error"].casefold()
+        assert rendering.get_control(job_id) is None
 
 
 def test_execute_terminates_running_process_when_cancelled(monkeypatch):
