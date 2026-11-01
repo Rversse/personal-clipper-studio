@@ -448,15 +448,25 @@ def render_sequence(
         raise RenderError("Sequence harus berisi 1 sampai 100 klip.")
     if aspect_ratio not in OUTPUT_SIZES:
         raise RenderError("Rasio aspek tidak didukung.")
-    normalized: list[tuple[float, float]] = []
+    normalized: list[dict[str, float]] = []
     for segment in segments:
         try:
             start, end = float(segment["start"]), float(segment["end"])
+            segment_zoom = float(segment.get("crop_zoom", crop_zoom))
+            segment_x = float(segment.get("crop_x", crop_x))
+            segment_y = float(segment.get("crop_y", crop_y))
         except (KeyError, TypeError, ValueError) as error:
             raise RenderError("Data klip sequence tidak valid.") from error
         if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
             raise RenderError("Rentang salah satu klip tidak valid.")
-        normalized.append((start, end))
+        if (not all(math.isfinite(value) for value in (segment_zoom, segment_x, segment_y))
+                or not 1.0 <= segment_zoom <= 3.0
+                or not 0.0 <= segment_x <= 1.0 or not 0.0 <= segment_y <= 1.0):
+            raise RenderError("Pengaturan crop salah satu klip tidak valid.")
+        normalized.append({
+            "start": start, "end": end,
+            "crop_zoom": segment_zoom, "crop_x": segment_x, "crop_y": segment_y,
+        })
 
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -472,11 +482,12 @@ def render_sequence(
     concat_list = destination.parent / (".{}-{}.ffconcat".format(destination.stem, token))
     temporary_output = destination.with_name(destination.stem + ".partial" + destination.suffix)
     encoders: list[str] = []
-    total_duration = sum(end - start for start, end in normalized)
+    total_duration = sum(segment['end'] - segment['start'] for segment in normalized)
     completed_duration = 0.0
     try:
         temporary_output.unlink(missing_ok=True)
-        for index, ((start, end), part_path) in enumerate(zip(normalized, part_paths)):
+        for index, (segment, part_path) in enumerate(zip(normalized, part_paths)):
+            start, end = segment['start'], segment['end']
             if control:
                 control.check()
             def segment_progress(value: float, *, base: float = completed_duration, length: float = end - start) -> None:
@@ -486,7 +497,7 @@ def render_sequence(
                 source, part_path, start, end, aspect_ratio,
                 progress=segment_progress, subtitle_segments=subtitle_segments,
                 subtitle_preset=subtitle_preset,
-                crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
+                crop_zoom=segment['crop_zoom'], crop_x=segment['crop_x'], crop_y=segment['crop_y'],
                 subtitle_style=subtitle_style, control=control,
             )
             encoders.append(result["encoder"])
