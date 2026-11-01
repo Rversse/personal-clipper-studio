@@ -688,3 +688,134 @@ def test_render_sequence_rejects_invalid_per_clip_crop(tmp_path, monkeypatch):
         assert "crop" in str(error).lower()
     else:
         raise AssertionError("Out-of-range per-clip crop must be rejected")
+
+
+def test_render_command_applies_audio_gain_and_mute_and_validates_range(tmp_path):
+    base = dict(
+        source=tmp_path / "source.mp4",
+        destination=tmp_path / "output.mp4",
+        start_seconds=0,
+        end_seconds=10,
+        aspect_ratio="9:16",
+        encoder="libx264",
+    )
+    command = rendering.build_render_command(**base, audio_volume=0.35)
+    assert command[command.index("-af") + 1] == "volume=0.3500"
+
+    muted = rendering.build_render_command(**base, audio_volume=0.0)
+    assert muted[muted.index("-af") + 1] == "volume=0.0000"
+
+    unchanged = rendering.build_render_command(**base, audio_volume=1.0)
+    assert "-af" not in unchanged
+
+    for volume in (-0.01, 2.01, float("nan")):
+        try:
+            rendering.build_render_command(**base, audio_volume=volume)
+        except rendering.RenderError as error:
+            assert "volume" in str(error).lower()
+        else:
+            raise AssertionError("Invalid audio gain must be rejected")
+
+
+def test_render_sequence_applies_distinct_audio_gain_per_clip(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(rendering.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    calls = []
+
+    def fake_render(source_path, output_path, start, end, ratio, progress=None, **kwargs):
+        calls.append(kwargs["audio_volume"])
+        output_path.write_bytes(b"x" * 2048)
+        return {"encoder": "libx264", "output": str(output_path)}
+
+    def fake_concat(command, duration, progress, control=None):
+        Path(command[-1]).write_bytes(b"y" * 4096)
+
+    monkeypatch.setattr(rendering, "render_clip", fake_render)
+    monkeypatch.setattr(rendering, "_execute", fake_concat)
+    rendering.render_sequence(
+        source, destination,
+        [
+            {"start": 0, "end": 5, "audio_volume": 0.25},
+            {"start": 10, "end": 15, "audio_volume": 0.0},
+        ],
+        "9:16",
+    )
+    assert calls == [0.25, 0.0]
+
+
+def test_render_sequence_rejects_invalid_per_clip_audio_gain(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    for volume in (-0.1, 2.1, float("nan")):
+        try:
+            rendering.render_sequence(
+                source, tmp_path / "out.mp4",
+                [{"start": 0, "end": 5, "audio_volume": volume}],
+                "9:16",
+            )
+        except rendering.RenderError as error:
+            assert "volume" in str(error).lower()
+        else:
+            raise AssertionError("Invalid per-clip audio gain must be rejected")
+
+
+def test_export_api_persists_per_clip_audio_gain_and_global_fallback(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 0, "end_seconds": 20,
+                "audio_volume": 0.6,
+                "clip_segments": [
+                    {"start": 0, "end": 5, "audio_volume": 0.25},
+                    {"start": 10, "end": 20},
+                ],
+            },
+        )
+        assert response.status_code == 202
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT clip_segments FROM export_jobs WHERE id=?", (response.json()["id"],)
+            ).fetchone()
+        import json
+        segments = json.loads(row["clip_segments"])
+        assert [segment["audio_volume"] for segment in segments] == [0.25, 0.6]
+
+
+def test_export_api_rejects_audio_gain_outside_supported_range(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    with TestClient(app) as client:
+        media_id = seed_media()
+        for volume in (-0.1, 2.1):
+            response = client.post(
+                f"/api/media/{media_id}/exports",
+                json={
+                    "start_seconds": 0, "end_seconds": 10,
+                    "audio_volume": volume,
+                },
+            )
+            assert response.status_code == 422
+
+
+def test_export_api_rejects_edited_caption_outside_source_duration(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 0, "end_seconds": 20,
+                "burn_subtitles": True,
+                "subtitle_segments": [{"start": 0, "end": 130, "text": "too long"}],
+            },
+        )
+        assert response.status_code == 422
+        assert "subtitle" in response.json()["detail"].lower()
