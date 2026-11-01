@@ -335,3 +335,75 @@ def test_delete_media_is_blocked_while_transcription_or_discovery_is_active(tmp_
             assert connection.execute(
                 "SELECT 1 FROM media_assets WHERE id=?", (media_id,)
             ).fetchone() is None
+
+
+
+def test_whisper_model_preflight_detects_cached_model_and_disk_space(tmp_path, monkeypatch):
+    cache = tmp_path / "hf-cache"
+    snapshot = cache / "models--Systran--faster-whisper-small" / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    (snapshot / "model.bin").write_bytes(b"cached")
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(transcription.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1))
+
+    result = transcription.whisper_model_preflight("small")
+
+    assert result["downloaded"] is True
+    assert result["estimated_download_bytes"] == 0
+    assert result["required_free_bytes"] == 0
+    assert result["disk_space_ok"] is True
+
+
+def test_whisper_model_preflight_estimates_missing_model_space(tmp_path, monkeypatch):
+    cache = tmp_path / "hf-cache"
+    cache.mkdir()
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(
+        transcription.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=100 * 1024**2),
+    )
+
+    result = transcription.whisper_model_preflight("large-v3")
+
+    assert result["downloaded"] is False
+    assert result["estimated_download_bytes"] == 3090 * 1024**2
+    assert result["required_free_bytes"] == 3602 * 1024**2
+    assert result["disk_space_known"] is True
+    assert result["disk_space_ok"] is False
+
+
+def test_whisper_model_preflight_rejects_unknown_model():
+    import pytest
+
+    with pytest.raises(ValueError, match="tidak dikenal"):
+        transcription.whisper_model_preflight("made-up-model")
+
+
+def test_start_transcription_blocks_when_model_will_not_fit(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(transcription, "is_available", lambda: True)
+    monkeypatch.setattr(
+        transcription,
+        "whisper_model_preflight",
+        lambda model: {
+            "model": model,
+            "downloaded": False,
+            "free_bytes": 100 * 1024**2,
+            "required_free_bytes": 1000 * 1024**2,
+            "disk_space_known": True,
+            "disk_space_ok": False,
+        },
+    )
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/transcription",
+            json={"model_name": "large-v3"},
+        )
+        assert response.status_code == 507
+        assert "Ruang disk tidak cukup" in response.json()["detail"]
+        with database.get_connection() as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) AS count FROM transcription_jobs"
+            ).fetchone()["count"] == 0
