@@ -33,7 +33,9 @@
 - [x] Per-clip crop zoom and focal positioning, sequence selection, local draft persistence, and independent FFmpeg rendering
 - [x] Convert split markers into renderable sequence clips
 - [x] Source timeline ruler, live playhead, selected-range and split-point visualization, plus clickable sequence strip
-- [ ] Full visual multi-track timeline with per-track editing
+- [x] Visual Video / linked Audio / transcript Captions timeline with shared output-time ruler
+- [x] Timeline clip selection, drag reorder, edge trim, playhead seeking, split, and synchronized export sequence
+- [ ] Independent audio-track mixing/editing and direct caption timing edits
 - [ ] Safe context-aware clip boundaries
 
 ## Phase 5 — rendering and delivery (partial)
