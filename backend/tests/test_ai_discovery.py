@@ -77,6 +77,46 @@ def test_queued_discovery_can_be_cancelled(tmp_path, monkeypatch):
         assert "dibatalkan" in response.json()["error"]
 
 
+
+def test_active_discovery_discards_provider_results_after_cancel(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    with TestClient(app):
+        media_id, transcript_id = seed_completed_transcript()
+        job_id = str(uuid.uuid4())
+        timestamp = main_module.now_iso()
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO discovery_jobs(
+                    id,media_id,transcription_id,status,provider,model_name,mode,
+                    min_duration,max_duration,created_at,updated_at
+                ) VALUES(?,?,?,'queued','gemini','test-model','auto',30,60,?,?)""",
+                (job_id, media_id, transcript_id, timestamp, timestamp),
+            )
+
+        def fake_analyze(*args, **kwargs):
+            main_module._JOB_CANCEL_EVENTS[job_id].set()
+            return [{
+                "start_seconds": 0, "end_seconds": 60, "title": "Should be discarded",
+                "hook": "Hook", "summary": "Summary", "rationale": "Rationale",
+                "score": 90, "category": "education",
+            }]
+
+        monkeypatch.setattr(ai_discovery, "analyze_transcript_chunk", fake_analyze)
+        main_module.run_discovery_job(job_id)
+
+        with database.get_connection() as connection:
+            job = connection.execute(
+                "SELECT status,error FROM discovery_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            candidates = connection.execute(
+                "SELECT COUNT(*) AS count FROM clip_candidates WHERE discovery_job_id=?",
+                (job_id,),
+            ).fetchone()["count"]
+        assert job["status"] == "cancelled"
+        assert "dibatalkan" in job["error"]
+        assert candidates == 0
+
+
 def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(
