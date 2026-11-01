@@ -195,7 +195,7 @@ def test_render_subtitle_requires_libass_and_cleans_temp_file(tmp_path, monkeypa
     monkeypatch.setattr(rendering, "subtitles_filter_available", lambda _: True)
     attempts = []
 
-    def fake_execute(command, duration, progress):
+    def fake_execute(command, duration, progress, control=None):
         attempts.append(command)
         Path(command[-1]).write_bytes(b"x" * 2048)
 
