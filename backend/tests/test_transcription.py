@@ -59,6 +59,43 @@ def test_queued_transcription_can_be_cancelled(tmp_path, monkeypatch):
         assert "dibatalkan" in response.json()["error"]
 
 
+
+def test_active_transcription_discards_results_after_cooperative_cancel(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    with TestClient(app):
+        media_id = seed_media()
+        job_id = str(uuid.uuid4())
+        timestamp = main_module.now_iso()
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,?,'queued','tiny',?,?)""",
+                (job_id, media_id, timestamp, timestamp),
+            )
+
+        def fake_transcribe(path, model_name, language, progress, cancel_check=None):
+            assert main_module._JOB_CANCEL_EVENTS[job_id].is_set() is False
+            main_module._JOB_CANCEL_EVENTS[job_id].set()
+            cancel_check()
+            raise AssertionError("Cancellation must stop result persistence.")
+
+        monkeypatch.setattr(transcription, "transcribe_file", fake_transcribe)
+        source = database.MEDIA_DIR / f"{media_id}.mp4"
+        main_module.run_transcription_job(job_id, str(source), "tiny", "id")
+
+        with database.get_connection() as connection:
+            job = connection.execute(
+                "SELECT status,error FROM transcription_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            segments = connection.execute(
+                "SELECT COUNT(*) AS count FROM transcript_segments WHERE job_id=?", (job_id,)
+            ).fetchone()["count"]
+        assert job["status"] == "cancelled"
+        assert "dibatalkan" in job["error"]
+        assert segments == 0
+
+
 def test_transcription_requires_optional_whisper(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(transcription, "is_available", lambda: False)
