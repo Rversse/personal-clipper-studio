@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 import mimetypes
 import json
 import os
+import re
+import unicodedata
 import uuid
 import threading
 import time
@@ -285,6 +287,19 @@ async def delete_media(asset_id: str):
         (THUMBNAIL_DIR / row["thumbnail_name"]).unlink(missing_ok=True)
     return Response(status_code=204)
 
+
+
+def word_timing_matches_segment_text(segment_text: str, words: list[dict]) -> bool:
+    """Use word events only when their text reconstructs the complete segment."""
+    token_pattern = re.compile(r"\\w+|[^\\w\\s]", re.UNICODE)
+
+    def tokens(value: str) -> list[str]:
+        normalized = unicodedata.normalize("NFKC", value).casefold()
+        return token_pattern.findall(normalized)
+
+    expected = tokens(segment_text)
+    actual = tokens(" ".join(str(word.get("text", "")).strip() for word in words))
+    return bool(expected) and expected == actual
 
 
 def transcription_payload(job_id: str) -> dict:
@@ -1028,14 +1043,31 @@ async def start_export(
                        WHERE s.job_id=? ORDER BY s.start,w.word_index""",
                     (transcript_job["id"],),
                 ).fetchall()
+                segments_by_id: dict[int, dict] = {}
                 for row in subtitle_rows:
+                    segment_id = int(row["id"])
+                    segment = segments_by_id.setdefault(segment_id, {
+                        "start": row["segment_start"],
+                        "end": row["segment_end"],
+                        "text": row["text"],
+                        "words": [],
+                    })
                     if row["word_text"] is not None:
-                        payload.subtitle_segments.append({
-                            "start": row["start"], "end": row["end"], "text": row["word_text"]
+                        segment["words"].append({
+                            "start": row["start"],
+                            "end": row["end"],
+                            "text": row["word_text"],
                         })
+                for segment in segments_by_id.values():
+                    if segment["words"] and word_timing_matches_segment_text(segment["text"], segment["words"]):
+                        payload.subtitle_segments.extend(segment["words"])
                     else:
+                        # Missing or malformed word timestamps must not silently
+                        # remove text from the rendered subtitle.
                         payload.subtitle_segments.append({
-                            "start": row["segment_start"], "end": row["segment_end"], "text": row["text"]
+                            "start": segment["start"],
+                            "end": segment["end"],
+                            "text": segment["text"],
                         })
     try:
         rendering.available_encoder()

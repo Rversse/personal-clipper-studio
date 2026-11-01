@@ -999,3 +999,112 @@ def test_export_worker_uses_persisted_render_settings(tmp_path, monkeypatch):
     assert captured["quality_profile"] == "high"
     assert captured["frame_rate"] == 60
     assert captured["normalize_audio"] is True
+
+
+
+def test_auto_subtitles_fall_back_to_segment_when_word_timestamps_are_partial(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda: True)
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        timestamp = main_module.now_iso()
+        transcription_id = str(uuid.uuid4())
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,?,'completed','tiny',?,?)""",
+                (transcription_id, media_id, timestamp, timestamp),
+            )
+            segment_cursor = connection.execute(
+                """INSERT INTO transcript_segments(job_id,start,end,text)
+                   VALUES(?,?,?,?)""",
+                (transcription_id, 2.0, 4.0, "satu dua tiga"),
+            )
+            segment_id = segment_cursor.lastrowid
+            connection.executemany(
+                """INSERT INTO transcript_words(
+                    job_id,segment_id,word_index,start,end,text,probability
+                ) VALUES(?,?,?,?,?,?,?)""",
+                [
+                    (transcription_id, segment_id, 0, 2.0, 2.4, "satu", 0.9),
+                    # The missing "dua" must force segment-level fallback.
+                    (transcription_id, segment_id, 1, 3.2, 3.8, "tiga", 0.9),
+                ],
+            )
+
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 0,
+                "end_seconds": 10,
+                "burn_subtitles": True,
+                "subtitle_segments": [],
+            },
+        )
+        assert response.status_code == 202
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT subtitle_payload FROM export_jobs WHERE id=?",
+                (response.json()["id"],),
+            ).fetchone()
+        saved = json.loads(row["subtitle_payload"])
+        assert saved == [{"start": 2.0, "end": 4.0, "text": "satu dua tiga"}]
+
+
+def test_auto_subtitles_use_word_events_when_text_matches_segment(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda: True)
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        timestamp = main_module.now_iso()
+        transcription_id = str(uuid.uuid4())
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,?,'completed','tiny',?,?)""",
+                (transcription_id, media_id, timestamp, timestamp),
+            )
+            segment_cursor = connection.execute(
+                """INSERT INTO transcript_segments(job_id,start,end,text)
+                   VALUES(?,?,?,?)""",
+                (transcription_id, 2.0, 4.0, "Satu, dua!"),
+            )
+            segment_id = segment_cursor.lastrowid
+            connection.executemany(
+                """INSERT INTO transcript_words(
+                    job_id,segment_id,word_index,start,end,text,probability
+                ) VALUES(?,?,?,?,?,?,?)""",
+                [
+                    (transcription_id, segment_id, 0, 2.0, 2.4, "Satu,", 0.9),
+                    (transcription_id, segment_id, 1, 2.5, 3.0, "dua!", 0.9),
+                ],
+            )
+
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 0,
+                "end_seconds": 10,
+                "burn_subtitles": True,
+                "subtitle_segments": [],
+            },
+        )
+        assert response.status_code == 202
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT subtitle_payload FROM export_jobs WHERE id=?",
+                (response.json()["id"],),
+            ).fetchone()
+        saved = json.loads(row["subtitle_payload"])
+        assert saved == [
+            {"start": 2.0, "end": 2.4, "text": "Satu,"},
+            {"start": 2.5, "end": 3.0, "text": "dua!"},
+        ]
