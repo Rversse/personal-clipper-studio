@@ -11,7 +11,7 @@ type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
 type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
-type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: number; crop_y?: number };
+type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: number; crop_y?: number; audio_volume?: number };
 type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string}[] };
 
@@ -65,7 +65,9 @@ function App() {
   const [cropZoom, setCropZoom] = useState(1);
   const [cropX, setCropX] = useState(0.5);
   const [cropY, setCropY] = useState(0.5);
+  const [audioVolume, setAudioVolume] = useState(1);
   const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
+  const [subtitleTiming, setSubtitleTiming] = useState<Record<number, { start: number; end: number }>>({});
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
   const [subtitleFontSize, setSubtitleFontSize] = useState(52);
   const [subtitlePosition, setSubtitlePosition] = useState(8);
@@ -82,6 +84,10 @@ function App() {
     initialStart: number; initialEnd: number; secondsPerPixel: number;
     isSequence: boolean;
   } | null>(null);
+  const captionTimingDragRef = useRef<{
+    index: number; mode: "move" | "start" | "end"; startX: number;
+    initialStart: number; initialEnd: number; secondsPerPixel: number;
+  } | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [editorSaved, setEditorSaved] = useState(false);
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
@@ -91,8 +97,15 @@ function App() {
   const editorDuration = Math.max(0, editEnd - editStart);
   const editorSourceDuration = Math.max(0, media.find(item => item.id === aiMediaId)?.duration ?? previewRef.current?.duration ?? 0);
   const visibleSplitPoints = splitPoints.filter(point => point > editStart && point < editEnd);
-  const visibleSubtitleSegments = (transcription?.media_id === aiMediaId ? transcription.segments ?? [] : []).filter(segment => segment.end > editStart && segment.start < editEnd);
   const timelineTranscriptSegments = transcription?.media_id === aiMediaId ? transcription.segments ?? [] : [];
+  function getSubtitleRange(index: number, segment: { start: number; end: number }) {
+    return subtitleTiming[index] ?? { start: segment.start, end: segment.end };
+  }
+  const visibleSubtitleSegments = timelineTranscriptSegments.filter(segment => {
+    const index = timelineTranscriptSegments.indexOf(segment);
+    const timing = getSubtitleRange(index, segment);
+    return timing.end > editStart && timing.start < editEnd;
+  });
   const timelineClips: ClipSegment[] = clipSequence.length ? clipSequence : editEnd > editStart
     ? [{ start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY }]
     : [];
@@ -152,6 +165,7 @@ function App() {
     if (!aiMediaId) return;
     setTranscription(null);
     setSubtitleText({});
+    setSubtitleTiming({});
     setBurnSubtitles(false);
     let cancelled = false;
     const restoreLatestJobs = async () => {
@@ -243,11 +257,12 @@ function App() {
 
   async function startExport() {
     if (!aiMediaId || editEnd <= editStart) return;
-    const selectedClips = clipSequence.length ? clipSequence : [{ start: editStart, end: editEnd }];
+    const selectedClips = clipSequence.length ? clipSequence : [{ start: editStart, end: editEnd, audio_volume: audioVolume }];
     const subtitleSource = transcription?.media_id === aiMediaId ? transcription.segments ?? [] : [];
-    const selectedSubtitles = subtitleSource.filter(segment =>
-      selectedClips.some(clip => segment.end > clip.start && segment.start < clip.end)
-    );
+    const selectedSubtitles = subtitleSource.filter((segment,index) => {
+      const timing = getSubtitleRange(index, segment);
+      return selectedClips.some(clip => timing.end > clip.start && timing.start < clip.end);
+    });
     setExportBusy(true);
     setError("");
     try {
@@ -261,16 +276,18 @@ function App() {
             ...clip,
             crop_zoom: clip.crop_zoom ?? cropZoom,
             crop_x: clip.crop_x ?? cropX,
-            crop_y: clip.crop_y ?? cropY
+            crop_y: clip.crop_y ?? cropY,
+            audio_volume: clip.audio_volume ?? audioVolume
           })),
           aspect_ratio: aspectRatio,
-          crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY,
+          crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: audioVolume,
           burn_subtitles: burnSubtitles,
           subtitle_preset: subtitlePreset,
           subtitle_style: { font_size: subtitleFontSize, vertical_position: subtitlePosition, outline_width: subtitleOutline, background_opacity: subtitleBackground },
           subtitle_segments: burnSubtitles ? selectedSubtitles.map(segment => {
             const index = subtitleSource.indexOf(segment);
-            return { start: segment.start, end: segment.end, text: index >= 0 ? (subtitleText[index] ?? segment.text) : segment.text };
+            const timing = index >= 0 ? getSubtitleRange(index, segment) : segment;
+            return { start: timing.start, end: timing.end, text: index >= 0 ? (subtitleText[index] ?? segment.text) : segment.text };
           }) : []
         })
       });
@@ -370,17 +387,20 @@ function App() {
     if (!aiMediaId) return;
     setClipSequence([]);
     setSelectedSequenceIndex(null);
+    setAudioVolume(1);
+    setSubtitleTiming({});
     setCropZoom(1);
     setCropX(0.5);
     setCropY(0.5);
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
-        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; selectedSequenceIndex?: number | null; cropZoom?: number; cropX?: number; cropY?: number; subtitleFontSize?: number; subtitlePosition?: number; subtitleOutline?: number; subtitleBackground?: number };
+        const parsed = JSON.parse(saved) as { start?: number; end?: number; ratio?: string; texts?: Record<number,string>; subtitleTiming?: Record<number,{start:number;end:number}>; preset?: string; splits?: number[]; sequence?: ClipSegment[]; selectedSequenceIndex?: number | null; cropZoom?: number; cropX?: number; cropY?: number; audioVolume?: number; subtitleFontSize?: number; subtitlePosition?: number; subtitleOutline?: number; subtitleBackground?: number };
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
         setSubtitleText(parsed.texts ?? {});
+        setSubtitleTiming(parsed.subtitleTiming ?? {});
         setSubtitlePreset(parsed.preset ?? "clean");
         setSubtitleFontSize(Math.max(24, Math.min(120, parsed.subtitleFontSize ?? 52)));
         setSubtitlePosition(Math.max(5, Math.min(30, parsed.subtitlePosition ?? 8)));
@@ -389,9 +409,12 @@ function App() {
         setSplitPoints(parsed.splits ?? []);
         const restoredSequence = Array.isArray(parsed.sequence)
           ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start)
+            .map(item => ({ ...item, audio_volume: Number.isFinite(item.audio_volume) ? Math.max(0, Math.min(2, item.audio_volume!)) : 1 }))
           : [];
         setClipSequence(restoredSequence);
-        setSelectedSequenceIndex(Number.isInteger(parsed.selectedSequenceIndex) && parsed.selectedSequenceIndex! >= 0 && parsed.selectedSequenceIndex! < restoredSequence.length ? parsed.selectedSequenceIndex! : null);
+        const restoredIndex = Number.isInteger(parsed.selectedSequenceIndex) && parsed.selectedSequenceIndex! >= 0 && parsed.selectedSequenceIndex! < restoredSequence.length ? parsed.selectedSequenceIndex! : null;
+        setSelectedSequenceIndex(restoredIndex);
+        setAudioVolume(restoredIndex !== null ? restoredSequence[restoredIndex].audio_volume ?? 1 : Math.max(0, Math.min(2, parsed.audioVolume ?? 1)));
         setCropZoom(Math.max(1, Math.min(3, parsed.cropZoom ?? 1)));
         setCropX(Math.max(0, Math.min(1, parsed.cropX ?? 0.5)));
         setCropY(Math.max(0, Math.min(1, parsed.cropY ?? 0.5)));
@@ -399,6 +422,8 @@ function App() {
         setEditStart(0);
         setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
         setSubtitleText({});
+        setSubtitleTiming({});
+        setAudioVolume(1);
         setSplitPoints([]);
         setClipSequence([]);
         setAspectRatio("9:16");
@@ -410,6 +435,8 @@ function App() {
       setEditStart(0);
       setEditEnd(media.find(item => item.id === aiMediaId)?.duration ?? 0);
       setSubtitleText({});
+      setSubtitleTiming({});
+      setAudioVolume(1);
       setSubtitleFontSize(52); setSubtitlePosition(8); setSubtitleOutline(2); setSubtitleBackground(0);
       setSplitPoints([]);
       setClipSequence([]);
@@ -433,7 +460,7 @@ function App() {
   function saveEditorDraft() {
     if (!aiMediaId || editEnd <= editStart) return;
     localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
-      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, selectedSequenceIndex, cropZoom, cropX, cropY, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
+      start: editStart, end: editEnd, ratio: aspectRatio, texts: subtitleText, subtitleTiming, preset: subtitlePreset, splits: splitPoints, sequence: clipSequence, selectedSequenceIndex, cropZoom, cropX, cropY, audioVolume, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
     }));
     setEditorSaved(true);
     window.setTimeout(() => setEditorSaved(false), 2400);
@@ -463,7 +490,7 @@ function App() {
     if (editEnd <= editStart || clipSequence.length >= 100) return;
     const nextIndex = clipSequence.length;
     setClipSequence(previous => [...previous, {
-      start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY
+      start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: audioVolume
     }]);
     setSelectedSequenceIndex(nextIndex);
   }
@@ -473,7 +500,7 @@ function App() {
     if (!points.length) return;
     const boundaries = [editStart, ...points, editEnd];
     const ranges = boundaries.slice(0, -1).map((start, index) => ({
-      start, end: boundaries[index + 1], crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY
+      start, end: boundaries[index + 1], crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: audioVolume
     }));
     const nextIndex = clipSequence.length;
     setClipSequence(previous => [...previous, ...ranges].slice(0, 100));
@@ -533,6 +560,73 @@ function App() {
         return;
       }
       elapsed += clipDuration;
+    }
+  }
+
+  function updateSelectedAudioVolume(value: number) {
+    const next = Math.max(0, Math.min(2, Number.isFinite(value) ? value : 1));
+    setAudioVolume(next);
+    if (selectedSequenceIndex !== null) {
+      setClipSequence(previous => previous.map((clip,index)=>index===selectedSequenceIndex
+        ? { ...clip, audio_volume: next }
+        : clip));
+    } else if (editEnd > editStart) {
+      setClipSequence([{ start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: next }]);
+      setSelectedSequenceIndex(0);
+    }
+  }
+
+  function updateSubtitleRange(index: number, edge: "start" | "end", value: number) {
+    const segment = timelineTranscriptSegments[index];
+    if (!segment || !Number.isFinite(value)) return;
+    const current = getSubtitleRange(index, segment);
+    const maximum = editorSourceDuration > 0 ? editorSourceDuration : Number.MAX_SAFE_INTEGER;
+    const nextStart = edge === "start" ? Math.max(0, Math.min(value, current.end - 0.05)) : current.start;
+    const nextEnd = edge === "end" ? Math.min(maximum, Math.max(current.start + 0.05, value)) : current.end;
+    setSubtitleTiming(previous => ({ ...previous, [index]: { start: nextStart, end: nextEnd } }));
+  }
+
+  function beginCaptionTiming(event: React.PointerEvent<HTMLElement>, index: number, mode: "move" | "start" | "end") {
+    event.preventDefault();
+    event.stopPropagation();
+    const segment = timelineTranscriptSegments[index];
+    const lane = event.currentTarget.closest(".captions-lane") as HTMLDivElement | null;
+    if (!segment || !lane) return;
+    const timing = getSubtitleRange(index, segment);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    captionTimingDragRef.current = {
+      index, mode, startX: event.clientX,
+      initialStart: timing.start, initialEnd: timing.end,
+      secondsPerPixel: timelineTotalDuration / Math.max(1, lane.getBoundingClientRect().width),
+    };
+  }
+
+  function moveCaptionTiming(event: React.PointerEvent<HTMLElement>) {
+    const drag = captionTimingDragRef.current;
+    if (!drag) return;
+    const delta = (event.clientX - drag.startX) * drag.secondsPerPixel;
+    const duration = drag.initialEnd - drag.initialStart;
+    const maximum = editorSourceDuration > 0 ? editorSourceDuration : Number.MAX_SAFE_INTEGER;
+    let start = drag.initialStart;
+    let end = drag.initialEnd;
+    if (drag.mode === "move") {
+      start = Math.max(0, Math.min(maximum - duration, drag.initialStart + delta));
+      end = start + duration;
+    } else if (drag.mode === "start") {
+      start = Math.max(0, Math.min(drag.initialEnd - 0.05, drag.initialStart + delta));
+    } else {
+      end = Math.min(maximum, Math.max(drag.initialStart + 0.05, drag.initialEnd + delta));
+    }
+    setSubtitleTiming(previous => ({
+      ...previous,
+      [drag.index]: { start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) }
+    }));
+  }
+
+  function endCaptionTiming(event: React.PointerEvent<HTMLElement>) {
+    captionTimingDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }
 
@@ -643,6 +737,7 @@ function App() {
     setCropZoom(clip.crop_zoom ?? cropZoom);
     setCropX(clip.crop_x ?? cropX);
     setCropY(clip.crop_y ?? cropY);
+    setAudioVolume(clip.audio_volume ?? 1);
     if (seek) seekPreview(clip.start);
   }
 
