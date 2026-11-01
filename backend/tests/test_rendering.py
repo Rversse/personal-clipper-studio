@@ -941,3 +941,61 @@ def test_export_api_rejects_platform_preset_with_mismatched_aspect_ratio(tmp_pat
         )
         assert response.status_code == 422
         assert "Rasio aspek" in response.json()["detail"]
+
+
+def test_nvenc_quality_profile_maps_to_encoder_specific_options(tmp_path):
+    command = rendering.build_render_command(
+        tmp_path / "source.mp4", tmp_path / "output.mp4", 0, 10,
+        "9:16", "h264_nvenc", quality_profile="high", frame_rate=30,
+    )
+    assert command[command.index("-preset") + 1] == "p6"
+    assert command[command.index("-cq") + 1] == "20"
+
+
+def test_export_api_accepts_legacy_custom_aspect_without_platform_preset(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 30, "aspect_ratio": "1:1"},
+        )
+        assert response.status_code == 202
+        assert response.json()["output_preset"] == "custom"
+
+
+def test_export_worker_uses_persisted_render_settings(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    real_run_export_job = main_module.run_export_job
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+    captured = {}
+
+    def fake_render(source, destination, segments, ratio, **kwargs):
+        captured.update(kwargs)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"x" * 2048)
+        return {"encoder": "libx264", "output": str(destination)}
+
+    monkeypatch.setattr(rendering, "render_sequence", fake_render)
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 5, "end_seconds": 30, "aspect_ratio": "9:16",
+                "output_preset": "youtube_shorts", "quality_profile": "high",
+                "frame_rate": 60, "normalize_audio": True,
+            },
+        )
+        assert response.status_code == 202
+        job = response.json()
+        real_run_export_job(
+            job["id"], str(database.MEDIA_DIR / "source.mp4"),
+            str(database.EXPORT_DIR / job["output_name"])
+        )
+    assert captured["quality_profile"] == "high"
+    assert captured["frame_rate"] == 60
+    assert captured["normalize_audio"] is True
