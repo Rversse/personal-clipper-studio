@@ -82,6 +82,8 @@ def ensure_storage() -> None:
                 UNIQUE(segment_id, word_index)
             );
             CREATE INDEX IF NOT EXISTS idx_transcript_words_job ON transcript_words(job_id, start);
+            CREATE INDEX IF NOT EXISTS idx_transcript_words_job_segment
+                ON transcript_words(job_id, segment_id, word_index);
             CREATE TABLE IF NOT EXISTS discovery_jobs (
                 id TEXT PRIMARY KEY,
                 media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,

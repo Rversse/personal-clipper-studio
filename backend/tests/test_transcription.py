@@ -255,6 +255,11 @@ def test_ensure_storage_migrates_legacy_transcript_database(tmp_path, monkeypatc
             assert {row["name"] for row in columns} >= {
                 "job_id", "segment_id", "word_index", "start", "end", "text", "probability"
             }
+            indexes = {
+                row["name"]
+                for row in connection.execute("PRAGMA index_list(transcript_words)").fetchall()
+            }
+            assert "idx_transcript_words_job_segment" in indexes
         response = client.get(f"/api/transcriptions/{job_id}")
         assert response.status_code == 200
         assert response.json()["segments"][0]["text"] == "Legacy words are not available"
