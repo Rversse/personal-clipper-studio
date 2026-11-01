@@ -404,7 +404,10 @@ function App() {
         setEditStart(parsed.start ?? 0);
         setEditEnd(parsed.end ?? (media.find(item => item.id === aiMediaId)?.duration ?? 0));
         setAspectRatio(parsed.ratio ?? "9:16");
-        setOutputPreset(parsed.outputPreset ?? "youtube_shorts");
+        const savedOutputPreset = ["youtube_shorts","instagram_reels","square_feed","landscape","custom"].includes(parsed.outputPreset ?? "")
+          ? parsed.outputPreset!
+          : parsed.ratio === "1:1" ? "square_feed" : parsed.ratio === "16:9" ? "landscape" : "youtube_shorts";
+        setOutputPreset(savedOutputPreset);
         setQualityProfile(["balanced","high","maximum"].includes(parsed.qualityProfile ?? "") ? parsed.qualityProfile! : "balanced");
         setFrameRate(parsed.frameRate === null ? null : [24,30,60].includes(parsed.frameRate ?? 30) ? parsed.frameRate ?? 30 : 30);
         setNormalizeAudio(parsed.normalizeAudio ?? false);
