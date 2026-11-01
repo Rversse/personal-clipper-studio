@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, Response
 
 from .database import EXPORT_DIR, MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
+from .clip_boundaries import refine_candidate_boundaries
 from .schemas import (
     DiscoveryCreate, DiscoveryResponse, MediaResponse, ProjectCreate, ProjectResponse,
     TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, ExportCreate, ExportResponse,
@@ -409,17 +410,13 @@ def normalize_candidate(
     if target_end < chunk_start or target_end > chunk_end + 1:
         return None
 
-    start_segment = min(chunk, key=lambda item: abs(float(item["start"]) - target_start))
-    end_segment = min(chunk, key=lambda item: abs(float(item["end"]) - target_end))
-    if abs(float(start_segment["start"]) - target_start) > 5:
+    refined = refine_candidate_boundaries(
+        target_start, target_end, chunk, min_duration, max_duration
+    )
+    if refined is None:
         return None
-    if abs(float(end_segment["end"]) - target_end) > 5:
-        return None
-    start_seconds = float(start_segment["start"])
-    end_seconds = float(end_segment["end"])
-    duration = end_seconds - start_seconds
-    if not min_duration <= duration <= max_duration or end_seconds <= start_seconds:
-        return None
+    start_seconds = float(refined["start_seconds"])
+    end_seconds = float(refined["end_seconds"])
 
     def safe_text(field: str, limit: int) -> str:
         value = raw.get(field)
@@ -441,6 +438,10 @@ def normalize_candidate(
         "rationale": rationale,
         "score": score,
         "category": category,
+        "boundary_quality": int(refined["boundary_quality"]),
+        "opening_boundary": str(refined["opening_boundary"])[:160],
+        "ending_boundary": str(refined["ending_boundary"])[:160],
+        "context_note": str(refined["context_note"])[:320],
     }
 
 
@@ -533,13 +534,16 @@ def run_discovery_job(job_id: str) -> None:
                     connection.execute(
                         """INSERT OR IGNORE INTO clip_candidates(
                             id,discovery_job_id,start_seconds,end_seconds,title,hook,
-                            summary,rationale,score,category,created_at
-                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                            summary,rationale,score,category,boundary_quality,
+                            opening_boundary,ending_boundary,context_note,created_at
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             str(uuid.uuid4()), job_id, candidate["start_seconds"],
                             candidate["end_seconds"], candidate["title"], candidate["hook"],
                             candidate["summary"], candidate["rationale"], candidate["score"],
-                            candidate["category"], now_iso(),
+                            candidate["category"], candidate["boundary_quality"],
+                            candidate["opening_boundary"], candidate["ending_boundary"],
+                            candidate["context_note"], now_iso(),
                         ),
                     )
                 progress = (chunk_index + 1) / len(chunks)
