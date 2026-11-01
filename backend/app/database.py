@@ -97,6 +97,10 @@ def ensure_storage() -> None:
                 rationale TEXT NOT NULL,
                 score INTEGER NOT NULL CHECK(score >= 0 AND score <= 100),
                 category TEXT NOT NULL,
+                boundary_quality INTEGER NOT NULL DEFAULT 50,
+                opening_boundary TEXT NOT NULL DEFAULT 'Batas segmen transkrip',
+                ending_boundary TEXT NOT NULL DEFAULT 'Batas segmen transkrip',
+                context_note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 UNIQUE(discovery_job_id, start_seconds, end_seconds)
             );
@@ -128,6 +132,15 @@ def ensure_storage() -> None:
             CREATE INDEX IF NOT EXISTS idx_export_status ON export_jobs(status);
             """
         )
+        candidate_columns = {row["name"] for row in connection.execute("PRAGMA table_info(clip_candidates)").fetchall()}
+        if "boundary_quality" not in candidate_columns:
+            connection.execute("ALTER TABLE clip_candidates ADD COLUMN boundary_quality INTEGER NOT NULL DEFAULT 50")
+        if "opening_boundary" not in candidate_columns:
+            connection.execute("ALTER TABLE clip_candidates ADD COLUMN opening_boundary TEXT NOT NULL DEFAULT 'Batas segmen transkrip'")
+        if "ending_boundary" not in candidate_columns:
+            connection.execute("ALTER TABLE clip_candidates ADD COLUMN ending_boundary TEXT NOT NULL DEFAULT 'Batas segmen transkrip'")
+        if "context_note" not in candidate_columns:
+            connection.execute("ALTER TABLE clip_candidates ADD COLUMN context_note TEXT NOT NULL DEFAULT ''")
         export_columns = {row["name"] for row in connection.execute("PRAGMA table_info(export_jobs)").fetchall()}
         if "subtitle_payload" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN subtitle_payload TEXT")
