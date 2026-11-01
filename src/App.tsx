@@ -101,17 +101,23 @@ function App() {
     ? selectedSequenceIndex : timelineClips.length ? 0 : null;
   const timelinePlayheadOutput = (() => {
     if (!timelineClips.length) return 0;
+    const sourcePosition = (index: number) => timelineClips.slice(0,index).reduce((sum,clip)=>sum+clip.end-clip.start,0);
+    if (timelineSelectedIndex !== null) {
+      const selected = timelineClips[timelineSelectedIndex];
+      if (playheadSeconds >= selected.start && playheadSeconds <= selected.end) {
+        return sourcePosition(timelineSelectedIndex) + playheadSeconds - selected.start;
+      }
+    }
     let elapsed = 0;
-    for (let index = 0; index < timelineClips.length; index += 1) {
-      const clip = timelineClips[index];
-      if ((index === timelineSelectedIndex || (playheadSeconds >= clip.start && playheadSeconds <= clip.end))
-          && playheadSeconds >= clip.start && playheadSeconds <= clip.end) {
-        return elapsed + Math.max(0, Math.min(clip.end - clip.start, playheadSeconds - clip.start));
+    for (const clip of timelineClips) {
+      if (playheadSeconds >= clip.start && playheadSeconds <= clip.end) {
+        return elapsed + playheadSeconds - clip.start;
       }
       elapsed += clip.end - clip.start;
     }
-    const selected = timelineSelectedIndex === null ? timelineClips[0] : timelineClips[timelineSelectedIndex];
-    return selected ? timelineClips.slice(0, timelineSelectedIndex ?? 0).reduce((sum, clip) => sum + clip.end - clip.start, 0) + Math.max(0, Math.min(selected.end - selected.start, playheadSeconds - selected.start)) : 0;
+    const index = timelineSelectedIndex ?? 0;
+    const selected = timelineClips[index];
+    return selected ? sourcePosition(index) + Math.max(0,Math.min(selected.end-selected.start,playheadSeconds-selected.start)) : 0;
   })();
 
   const loadProjects = useCallback(async () => {
@@ -522,7 +528,7 @@ function App() {
       const clipDuration = clip.end - clip.start;
       if (outputTime <= elapsed + clipDuration || index === timelineClips.length - 1) {
         const sourceTime = clip.start + Math.max(0, Math.min(clipDuration, outputTime - elapsed));
-        if (clipSequence.length) selectSequenceClip(clip, index);
+        if (clipSequence.length) selectSequenceClip(clip, index, false);
         seekPreview(sourceTime);
         return;
       }
@@ -596,8 +602,9 @@ function App() {
     const nextStart = drag.edge === "start"
       ? Math.max(0, Math.min(drag.initialEnd - 0.5, drag.initialStart + delta))
       : drag.initialStart;
+    const maximum = editorSourceDuration > 0 ? editorSourceDuration : Number.MAX_SAFE_INTEGER;
     const nextEnd = drag.edge === "end"
-      ? Math.max(drag.initialStart + 0.5, drag.initialEnd + delta)
+      ? Math.min(maximum, Math.max(drag.initialStart + 0.5, drag.initialEnd + delta))
       : drag.initialEnd;
     if (drag.isSequence) {
       setClipSequence(previous => previous.map((clip, index) => index === drag.index
@@ -628,7 +635,7 @@ function App() {
     }
   }
 
-  function selectSequenceClip(clip: ClipSegment, index: number) {
+  function selectSequenceClip(clip: ClipSegment, index: number, seek = true) {
     setSelectedSequenceIndex(index);
     setEditorCandidateId("");
     setEditStart(clip.start);
@@ -636,7 +643,7 @@ function App() {
     setCropZoom(clip.crop_zoom ?? cropZoom);
     setCropX(clip.crop_x ?? cropX);
     setCropY(clip.crop_y ?? cropY);
-    seekPreview(clip.start);
+    if (seek) seekPreview(clip.start);
   }
 
   function openProject(project: Project) {
@@ -748,7 +755,7 @@ function App() {
                               onDragOver={event=>{if(clipSequence.length>1){event.preventDefault();event.dataTransfer.dropEffect="move";}}}
                               onDrop={event=>{event.preventDefault();const from=Number(event.dataTransfer.getData("text/plain"));if(Number.isInteger(from))reorderTimelineClip(from,index);setDraggedTimelineIndex(null);}}
                               onDragEnd={()=>setDraggedTimelineIndex(null)}
-                              onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(clip.start);}}
+                              onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(clip.start);}}
                               onKeyDown={event=>{if(event.key==="ArrowLeft"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.max(0,index-1));}if(event.key==="ArrowRight"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.min(clipSequence.length-1,index+1));}}}
                               role="button" tabIndex={0} aria-label={"Video clip "+(index+1)+", "+formatTimestamp(clip.start)+" to "+formatTimestamp(clip.end)}>
                               {clipSequence.length>0 && <span className="timeline-trim-handle left" title="Drag to trim clip start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"start")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
@@ -766,7 +773,7 @@ function App() {
                           {timelineClips.map((clip,index)=>{
                             const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
                             return <div key={"audio-"+index} className="multitrack-clip audio-clip" style={{left:(offset/timelineTotalDuration*100)+"%",width:((clip.end-clip.start)/timelineTotalDuration*100)+"%"}} onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(clip.start);}}>
-                              <span className="audio-waveform" aria-hidden="true">▂▅▃▇▅▂▆▄▇▃▅▂▇▄▆▃▅▇▂▅▄▇▃▆▂▅</span>
+                              <span className="audio-linked-label">SOURCE AUDIO · LINKED</span>
                             </div>;
                           })}
                         </div>
