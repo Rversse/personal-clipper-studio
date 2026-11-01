@@ -12,7 +12,15 @@ use std::{
 };
 
 #[cfg(target_os = "windows")]
-use tauri::{path::BaseDirectory, Manager};
+use tauri::path::BaseDirectory;
+use tauri::Manager;
+
+struct AppSessionToken(String);
+
+#[tauri::command]
+fn get_local_api_token(state: tauri::State<'_, AppSessionToken>) -> String {
+    state.inner().0.clone()
+}
 
 #[cfg(target_os = "windows")]
 struct BackendProcess(Mutex<Option<Child>>);
@@ -54,6 +62,9 @@ fn shutdown_backend(child: &mut Child) {
 fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
+            // A fresh, unpredictable token binds this WebView to its child API process.
+            let session_token = uuid::Uuid::new_v4().to_string();
+            app.manage(AppSessionToken(session_token.clone()));
             // Debug builds use the separately started development API.
             // Release Windows bundles start their packaged, loopback-only service here.
             #[cfg(target_os = "windows")]
@@ -90,6 +101,7 @@ fn main() {
                 command
                     .arg("--port")
                     .arg("8765")
+                    .arg("--require-session")
                     .stdin(Stdio::piped())
                     .stdout(Stdio::from(stdout))
                     .stderr(Stdio::from(stderr));
@@ -98,12 +110,22 @@ fn main() {
                 use std::os::windows::process::CommandExt;
                 command.creation_flags(0x08000000);
 
-                let child = command.spawn()?;
+                let mut child = command.spawn()?;
+                let handshake = match child.stdin.as_mut() {
+                    Some(stdin) => writeln!(stdin, "session:{}", session_token)
+                        .and_then(|_| stdin.flush()),
+                    None => Err(std::io::Error::other("Backend session channel is unavailable.")),
+                };
+                if let Err(error) = handshake {
+                    shutdown_backend(&mut child);
+                    return Err(error.into());
+                }
                 app.manage(BackendProcess(Mutex::new(Some(child))));
             }
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![get_local_api_token])
         .build(tauri::generate_context!())
         .expect("failed to build Personal Clipper Studio");
 

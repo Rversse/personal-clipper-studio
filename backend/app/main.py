@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import json
 import os
+import hmac
+import secrets
 import re
 import unicodedata
 import uuid
@@ -36,6 +38,52 @@ _EXPORT_WORKER_STOP = threading.Event()
 _JOB_CONTROLS_LOCK = threading.Lock()
 _JOB_CANCEL_EVENTS: dict[str, threading.Event] = {}
 _JOB_SHUTDOWN = threading.Event()
+
+# A session token is injected only by the packaged Tauri host. Running the API
+# manually for local development remains possible without desktop IPC.
+_API_SESSION_TOKEN: str | None = None
+_RESOURCE_TICKETS: dict[str, tuple[str, float]] = {}
+_RESOURCE_TICKETS_LOCK = threading.Lock()
+_RESOURCE_TICKET_TTL_SECONDS = 3600
+
+def configure_session_token(token: str) -> None:
+    """Bind the API to the one-time token received from the Tauri parent process."""
+    global _API_SESSION_TOKEN
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", token):
+        raise ValueError("Invalid desktop session token.")
+    _API_SESSION_TOKEN = token
+
+
+
+
+def issue_resource_ticket(resource_path: str) -> str:
+    """Issue a short-lived, path-scoped capability for native media elements."""
+    ticket = secrets.token_urlsafe(32)
+    now = time.monotonic()
+    with _RESOURCE_TICKETS_LOCK:
+        expired = [key for key, (_, deadline) in _RESOURCE_TICKETS.items() if deadline <= now]
+        for key in expired:
+            _RESOURCE_TICKETS.pop(key, None)
+        if len(_RESOURCE_TICKETS) >= 4096:
+            oldest = min(_RESOURCE_TICKETS, key=lambda key: _RESOURCE_TICKETS[key][1])
+            _RESOURCE_TICKETS.pop(oldest, None)
+        _RESOURCE_TICKETS[ticket] = (resource_path, now + _RESOURCE_TICKET_TTL_SECONDS)
+    return ticket
+
+
+def valid_resource_ticket(resource_path: str, ticket: str | None) -> bool:
+    if not ticket:
+        return False
+    now = time.monotonic()
+    with _RESOURCE_TICKETS_LOCK:
+        entry = _RESOURCE_TICKETS.get(ticket)
+        if entry is None:
+            return False
+        expected_path, deadline = entry
+        if deadline <= now:
+            _RESOURCE_TICKETS.pop(ticket, None)
+            return False
+        return hmac.compare_digest(expected_path, resource_path)
 
 
 class JobCancelled(RuntimeError):
@@ -169,28 +217,36 @@ app.include_router(ai_settings_router)
 
 @app.middleware("http")
 async def enforce_trusted_browser_origin(request, call_next):
-    """Block cross-origin browser requests to the unauthenticated loopback API.
+    """Enforce browser-origin, local-host, and desktop-session boundaries.
 
-    Native/local clients without an Origin header remain supported. Browser requests
-    must originate from the desktop UI or the explicitly allowed development UI.
+    The packaged desktop host configures a per-launch token. Development servers
+    started independently remain usable without the Tauri session channel.
     """
     origin = request.headers.get("origin")
     if origin is not None:
         if origin not in ALLOWED_UI_ORIGINS:
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "Origin browser tidak diizinkan."},
-            )
-
-        # Browser requests always carry Origin. Validate the destination Host
-        # as a second boundary against DNS rebinding and hostile virtual hosts.
-        # Native/local clients without Origin remain supported.
+            return JSONResponse(status_code=403, content={"detail": "Origin browser tidak diizinkan."})
         if request.url.hostname not in ALLOWED_API_HOSTS:
-            return JSONResponse(
-                status_code=421,
-                content={"detail": "Host API lokal tidak diizinkan."},
-            )
-    return await call_next(request)
+            return JSONResponse(status_code=421, content={"detail": "Host API lokal tidak diizinkan."})
+
+    if _API_SESSION_TOKEN and request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        resource_path = request.url.path
+        is_ticketed_resource = bool(
+            re.fullmatch(r"/api/media/[0-9a-fA-F-]+/(?:file|thumbnail)", resource_path)
+            or re.fullmatch(r"/api/exports/[0-9a-fA-F-]+/file", resource_path)
+        )
+        if is_ticketed_resource:
+            if not valid_resource_ticket(resource_path, request.query_params.get("ticket")):
+                return JSONResponse(status_code=401, content={"detail": "Akses file lokal tidak sah atau kedaluwarsa."})
+        else:
+            authorization = request.headers.get("authorization", "")
+            scheme, _, supplied_token = authorization.partition(" ")
+            if scheme.casefold() != "bearer" or not hmac.compare_digest(supplied_token, _API_SESSION_TOKEN):
+                return JSONResponse(status_code=401, content={"detail": "Sesi aplikasi tidak valid."})
+
+    response = await call_next(request)
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
 
 
 app.add_middleware(
@@ -228,13 +284,18 @@ def project_row(row, media_count: int = 0) -> ProjectResponse:
 
 
 def media_row(row) -> MediaResponse:
+    preview_path = f"/api/media/{row['id']}/file"
+    preview_ticket = issue_resource_ticket(preview_path) if _API_SESSION_TOKEN else None
+    thumbnail_path = f"/api/media/{row['id']}/thumbnail"
+    thumbnail_ticket = issue_resource_ticket(thumbnail_path) if _API_SESSION_TOKEN and row["thumbnail_name"] else None
     return MediaResponse(
         id=row["id"], project_id=row["project_id"], original_name=row["original_name"],
         mime_type=row["mime_type"], file_size=row["file_size"], duration=row["duration"],
         width=row["width"], height=row["height"], fps=row["fps"],
         video_codec=row["video_codec"], audio_codec=row["audio_codec"],
-        thumbnail_url=f"/api/media/{row['id']}/thumbnail" if row["thumbnail_name"] else None,
-        preview_url=f"/api/media/{row['id']}/file", created_at=row["created_at"],
+        thumbnail_url=(f"{thumbnail_path}?ticket={thumbnail_ticket}" if thumbnail_ticket else thumbnail_path) if row["thumbnail_name"] else None,
+        preview_url=f"{preview_path}?ticket={preview_ticket}" if preview_ticket else preview_path,
+        created_at=row["created_at"],
     )
 
 
@@ -1103,8 +1164,10 @@ def export_payload(job_id: str) -> dict:
     payload["clip_count"] = len(json.loads(payload["clip_segments"])) if payload.get("clip_segments") else 1
     settings = json.loads(payload["render_settings"]) if payload.get("render_settings") else {}
     payload.update(settings)
+    download_path = f"/api/exports/{job_id}/file"
+    download_ticket = issue_resource_ticket(download_path) if _API_SESSION_TOKEN and row["status"] == "completed" else None
     payload["download_url"] = (
-        f"/api/exports/{job_id}/file" if row["status"] == "completed" else None
+        f"{download_path}?ticket={download_ticket}" if download_ticket else download_path if row["status"] == "completed" else None
     )
     return payload
 

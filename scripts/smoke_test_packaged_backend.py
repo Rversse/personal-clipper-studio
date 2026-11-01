@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -19,22 +20,26 @@ def _free_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _read_json(url: str) -> dict:
-    with urlopen(url, timeout=5) as response:
+def _read_json(url: str, headers: dict[str, str] | None = None) -> dict:
+    request = Request(url, headers=headers or {})
+    with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-
-def _request_json(url: str, method: str, payload: dict | None = None) -> dict:
+def _request_json(
+    url: str,
+    method: str,
+    payload: dict | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request = Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"} if body is not None else {},
-        method=method,
-    )
+    request_headers = dict(headers or {})
+    if body is not None:
+        request_headers["Content-Type"] = "application/json"
+    request = Request(url, data=body, headers=request_headers, method=method)
     with urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
+
 
 def _stop_process_gracefully(process: subprocess.Popen[str], timeout: float = 15) -> None:
     """Ask the packaged server to stop cleanly, then enforce a bounded fallback."""
@@ -99,6 +104,8 @@ def main() -> int:
         )
 
     port = _free_loopback_port()
+    session_token = str(uuid.uuid4())
+    authorization = {"Authorization": f"Bearer {session_token}"}
     with tempfile.TemporaryDirectory(prefix="pcs-backend-smoke-") as temporary:
         work_dir = Path(temporary)
         env = os.environ.copy()
@@ -112,7 +119,7 @@ def main() -> int:
             "w", encoding="utf-8"
         ) as stderr:
             process = subprocess.Popen(
-                [str(executable), "--port", str(port)],
+                [str(executable), "--port", str(port), "--require-session"],
                 cwd=work_dir,
                 env=env,
                 stdin=subprocess.PIPE,
@@ -121,6 +128,10 @@ def main() -> int:
                 text=True,
                 encoding="utf-8",
             )
+            if process.stdin is None:
+                raise RuntimeError("Packaged backend session pipe was not created.")
+            process.stdin.write(f"session:{session_token}\n")
+            process.stdin.flush()
             base_url = f"http://127.0.0.1:{port}"
             try:
                 deadline = time.monotonic() + 60
@@ -150,13 +161,24 @@ def main() -> int:
                         f"stderr: {stderr_path.read_text(encoding='utf-8', errors='replace')}"
                     )
 
+                # Health remains open for startup probes; application routes require the session.
+                from urllib.error import HTTPError
+
+                try:
+                    _read_json(f"{base_url}/api/projects")
+                except HTTPError as error:
+                    if error.code != 401:
+                        raise
+                else:
+                    raise AssertionError("Packaged API accepted a request without its session token.")
+
                 create_request = Request(
                     f"{base_url}/api/projects",
                     data=json.dumps({
                         "name": "Packaged backend smoke test",
                         "description": "SQLite API integration check",
                     }).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", **authorization},
                     method="POST",
                 )
                 with urlopen(create_request, timeout=10) as response:
@@ -164,12 +186,12 @@ def main() -> int:
                 if not created.get("id") or created.get("name") != "Packaged backend smoke test":
                     raise AssertionError(f"Unexpected project creation response: {created}")
 
-                projects = _read_json(f"{base_url}/api/projects")
+                projects = _read_json(f"{base_url}/api/projects", headers=authorization)
                 if not any(project.get("id") == created["id"] for project in projects):
                     raise AssertionError("Created project was not returned by the list endpoint.")
 
                 ai_settings_url = f"{base_url}/api/settings/ai"
-                credential_status = _read_json(ai_settings_url)
+                credential_status = _read_json(ai_settings_url, headers=authorization)
                 if not credential_status.get("credential_store_available"):
                     raise AssertionError("Packaged Windows Credential Manager backend is unavailable.")
                 if credential_status.get("configured"):
@@ -181,19 +203,24 @@ def main() -> int:
                         f"{ai_settings_url}/gemini-key",
                         "PUT",
                         {"api_key": smoke_key},
+                        headers=authorization,
                     )
                     if not saved.get("configured") or saved.get("source") != "windows_credential_manager":
                         raise AssertionError("Gemini key was not stored in Windows Credential Manager.")
                     if smoke_key in json.dumps(saved):
                         raise AssertionError("Gemini key value was returned by the settings API.")
-                    restored = _read_json(ai_settings_url)
+                    restored = _read_json(ai_settings_url, headers=authorization)
                     if not restored.get("configured") or restored.get("source") != "windows_credential_manager":
                         raise AssertionError("Gemini key could not be read back from Windows Credential Manager.")
                     if smoke_key in json.dumps(restored):
                         raise AssertionError("Gemini key value was exposed by the settings API.")
                 finally:
-                    _request_json(f"{ai_settings_url}/gemini-key", "DELETE")
-                removed = _read_json(ai_settings_url)
+                    _request_json(
+                        f"{ai_settings_url}/gemini-key",
+                        "DELETE",
+                        headers=authorization,
+                    )
+                removed = _read_json(ai_settings_url, headers=authorization)
                 if removed.get("configured"):
                     raise AssertionError("Gemini smoke-test key remained in Windows Credential Manager.")
 

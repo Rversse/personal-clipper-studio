@@ -35,6 +35,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Personal Clipper Studio local API")
     parser.add_argument("--port", type=_port, default=8765)
     parser.add_argument(
+        "--require-session",
+        action="store_true",
+        help="Require the Tauri parent process to provide a one-time session token on stdin.",
+    )
+    parser.add_argument(
         "--self-check-runtime",
         action="store_true",
         help="Import-check the bundled CPU transcription and Windows credential-store dependencies, then exit.",
@@ -68,11 +73,28 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
+    session_token = None
+    require_session = arguments.require_session or bool(getattr(sys, "frozen", False))
+    if require_session:
+        first_line = sys.stdin.readline()
+        if not first_line.startswith("session:"):
+            raise SystemExit("The desktop session handshake is missing.")
+        session_token = first_line.removeprefix("session:").strip()
+        if len(session_token) != 36:
+            raise SystemExit("The desktop session handshake is invalid.")
+
     import uvicorn
+    from app.main import app, configure_session_token
+
+    if session_token is not None:
+        try:
+            configure_session_token(session_token)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
 
     server = uvicorn.Server(
         uvicorn.Config(
-            "app.main:app",
+            app,
             host="127.0.0.1",
             port=arguments.port,
             log_level="info",

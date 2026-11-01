@@ -48,7 +48,9 @@ def test_runner_binds_only_to_loopback(monkeypatch):
 
     assert len(config_calls) == 1
     args, kwargs = config_calls[0]
-    assert args == ("app.main:app",)
+    from app.main import app as api_app
+
+    assert args == (api_app,)
     assert kwargs["host"] == "127.0.0.1"
     assert kwargs["port"] == 18765
     assert kwargs["access_log"] is False

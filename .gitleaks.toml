@@ -1,0 +1,5 @@
+[allowlist]
+description = "Allow the fixed UUIDv4 fixture used only by the desktop-session validation test."
+condition = "AND"
+paths = ['''backend/tests/test_origin_security\.py''']
+regexes = ['''9b4f6f1a-8c3e-4f12-9a6d-7e8f9012abcd''']
