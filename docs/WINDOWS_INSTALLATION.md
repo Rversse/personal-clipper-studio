@@ -35,7 +35,7 @@ The System Check is diagnostic only and does not install software. It does not t
 - If that port is already in use, the app refuses to start its own backend rather than connecting to an unrelated local process.
 - The frontend retries while the backend starts and monitors it while the app is open.
 - Backend logs are written to the application log directory in `backend.log`.
-- The first transcription downloads the selected Whisper model. The model is not embedded in the installer and requires disk space and an internet connection.
+- The first transcription downloads the selected Whisper model. The model is not embedded in the installer and requires disk space and an internet connection. System Check and the AI Workspace inspect the Hugging Face model cache for the selected model and estimate its download size against free space on the cache volume. The estimate includes a 512 MB safety reserve; if free space can be measured and is below the estimate, starting transcription is blocked before a job is queued. Approximate model sizes vary by revision and cache state. If the operating system does not report free space, the app warns that capacity is unknown rather than blocking the job.
 
 ## AI providers and GPU
 
