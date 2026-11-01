@@ -50,8 +50,8 @@ jobs:
         run: uv pip install --python backend/.venv/bin/python --upgrade "setuptools>=84.1.0"
       - name: Audit installed Python dependencies for known vulnerabilities
         run: |
-          uv pip install --python .venv/bin/python "pip-audit==2.10.1"
-          uv run --project . --extra dev --no-sync pip-audit --local
+          uv pip install --python backend/.venv/bin/python "pip-audit==2.10.1"
+          uv run --project backend --extra dev --no-sync pip-audit --local
       - name: Run backend tests
         run: uv run --project . --extra dev --no-sync pytest -q
         working-directory: backend
