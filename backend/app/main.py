@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-import mimetypes
 import json
 import os
 import re
@@ -193,6 +192,17 @@ app.add_middleware(
 )
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg"}
+VIDEO_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".webm": "video/webm",
+    ".avi": "video/x-msvideo",
+    ".m4v": "video/mp4",
+    ".mpeg": "video/mpeg",
+    ".mpg": "video/mpeg",
+}
+SAFE_FILE_RESPONSE_HEADERS = {"X-Content-Type-Options": "nosniff"}
 MAX_UPLOAD_BYTES = int(os.environ.get("PCS_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024 * 1024)))
 
 
@@ -318,7 +328,7 @@ async def import_media(project_id: str, file: UploadFile = File(...)):
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     asset_id, project_id, original_name, stored_name,
-                    file.content_type or mimetypes.guess_type(original_name)[0] or "video/mp4",
+                    VIDEO_MEDIA_TYPES[extension],
                     size, metadata.get("duration"), metadata.get("width"), metadata.get("height"),
                     metadata.get("fps"), metadata.get("video_codec"), metadata.get("audio_codec"),
                     thumb_name if has_thumbnail else None, timestamp,
@@ -349,7 +359,11 @@ def media_file(asset_id: str, thumbnail: bool = False) -> tuple[Path, str]:
         media_type = "image/jpeg"
     else:
         path = MEDIA_DIR / row["stored_name"]
-        media_type = row["mime_type"]
+        # Do not trust MIME metadata persisted by older app versions; it may
+        # have originated from the untrusted multipart Content-Type header.
+        media_type = VIDEO_MEDIA_TYPES.get(path.suffix.lower())
+        if media_type is None:
+            raise HTTPException(status_code=415, detail="Tipe media tersimpan tidak didukung.")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File media tidak ditemukan di penyimpanan.")
     return path, media_type
@@ -358,13 +372,13 @@ def media_file(asset_id: str, thumbnail: bool = False) -> tuple[Path, str]:
 @app.get("/api/media/{asset_id}/file")
 async def get_media_file(asset_id: str):
     path, media_type = media_file(asset_id)
-    return FileResponse(path, media_type=media_type)
+    return FileResponse(path, media_type=media_type, headers=SAFE_FILE_RESPONSE_HEADERS)
 
 
 @app.get("/api/media/{asset_id}/thumbnail")
 async def get_media_thumbnail(asset_id: str):
     path, media_type = media_file(asset_id, thumbnail=True)
-    return FileResponse(path, media_type=media_type)
+    return FileResponse(path, media_type=media_type, headers=SAFE_FILE_RESPONSE_HEADERS)
 
 
 @app.delete("/api/media/{asset_id}", status_code=204)
@@ -1407,4 +1421,4 @@ async def download_export(job_id: str):
     path = EXPORT_DIR / row["output_name"]
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File hasil export tidak ditemukan.")
-    return FileResponse(path, media_type="video/mp4", filename=row["output_name"])
+    return FileResponse(path, media_type="video/mp4", filename=row["output_name"], headers=SAFE_FILE_RESPONSE_HEADERS)
