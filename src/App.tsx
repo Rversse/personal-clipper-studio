@@ -756,7 +756,11 @@ function App() {
                               onDrop={event=>{event.preventDefault();const from=Number(event.dataTransfer.getData("text/plain"));if(Number.isInteger(from))reorderTimelineClip(from,index);setDraggedTimelineIndex(null);}}
                               onDragEnd={()=>setDraggedTimelineIndex(null)}
                               onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(clip.start);}}
-                              onKeyDown={event=>{if(event.key==="ArrowLeft"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.max(0,index-1));}if(event.key==="ArrowRight"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.min(clipSequence.length-1,index+1));}}}
+                              onKeyDown={event=>{
+                                if((event.key==="Enter"||event.key===" ")&&clipSequence.length){event.preventDefault();selectSequenceClip(clip,index);return;}
+                                if(event.key==="ArrowLeft"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.max(0,index-1));}
+                                if(event.key==="ArrowRight"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.min(clipSequence.length-1,index+1));}
+                              }}
                               role="button" tabIndex={0} aria-label={"Video clip "+(index+1)+", "+formatTimestamp(clip.start)+" to "+formatTimestamp(clip.end)}>
                               {clipSequence.length>0 && <span className="timeline-trim-handle left" draggable={false} title="Drag to trim clip start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"start")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
                               <b>{String(index+1).padStart(2,"0")}</b><span className="timeline-clip-time">{formatTimestamp(clip.start)}–{formatTimestamp(clip.end)}</span>
