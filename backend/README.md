@@ -83,8 +83,8 @@ Install a recent FFmpeg build and make sure `ffmpeg` is available on PATH. The E
 
 ## Packaged Windows desktop runtime
 
-The Windows desktop workflow builds `desktop_runner.py` into `pcs-api.exe` with PyInstaller and includes the CPU `faster-whisper` runtime. Tauri starts this child service at `127.0.0.1:8765` in release builds and terminates it on normal application exit. The executable accepts only a port argument; its bind host is hard-coded to loopback.
+The Windows desktop workflow builds `desktop_runner.py` into a PyInstaller onedir distribution and includes the CPU `faster-whisper` runtime. Tauri starts `resources/pcs-api/pcs-api.exe` as a managed child process at `127.0.0.1:8765` in release builds and terminates it on normal application exit. The onedir layout keeps the service as one directly managed process, avoiding the extra bootloader/worker process used by PyInstaller onefile mode.
 
-A packaged-backend smoke test starts the generated executable on a temporary port and verifies the JSON health response before the installer build proceeds. Debug builds still require a separately started API process.
+The packaged-backend smoke test starts the generated executable on a temporary loopback port, verifies the health response, creates and lists a SQLite project, and confirms child-process termination. Debug builds still require a separately started API process.
 
 FFmpeg and FFprobe are not bundled. Install them separately and make sure both executables are on PATH before using media probing, audio analysis, thumbnails, or rendering. CUDA/cuDNN and NVENC are machine-specific and are not part of the Windows CPU backend bundle.

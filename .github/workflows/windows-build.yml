@@ -35,9 +35,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e "./backend[transcription]"
           python -m pip install "pyinstaller>=6.10,<7.0"
-      - name: Build self-contained local API executable
+      - name: Build self-contained local API directory
         run: >
-          pyinstaller --clean --noconfirm --onefile
+          pyinstaller --clean --noconfirm --onedir
           --name pcs-api
           --distpath build/windows-backend
           --workpath build/windows-pyinstaller
@@ -53,19 +53,23 @@ jobs:
           --collect-all tokenizers
           --collect-all av
           backend/desktop_runner.py
-      - name: Stage packaged API resource
+      - name: Stage packaged API resources
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $resourceDir = "src-tauri/resources"
-          New-Item -ItemType Directory -Force -Path $resourceDir | Out-Null
-          $backendExe = "build/windows-backend/pcs-api.exe"
+          $sourceDir = "build/windows-backend/pcs-api"
+          $resourceDir = "src-tauri/resources/pcs-api"
+          $backendExe = Join-Path $sourceDir "pcs-api.exe"
           if (-not (Test-Path $backendExe)) {
             throw "PyInstaller output is missing: $backendExe"
           }
-          Copy-Item $backendExe (Join-Path $resourceDir "pcs-api.exe") -Force
+          if (Test-Path $resourceDir) {
+            Remove-Item $resourceDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $resourceDir | Out-Null
+          Copy-Item (Join-Path $sourceDir "*") $resourceDir -Recurse -Force
       - name: Smoke-test packaged backend executable
-        run: python scripts/smoke_test_packaged_backend.py src-tauri/resources/pcs-api.exe
+        run: python scripts/smoke_test_packaged_backend.py src-tauri/resources/pcs-api/pcs-api.exe
       - name: Build unsigned NSIS and MSI installers
         run: npm run tauri -- build --bundles nsis,msi
       - name: Stage installers and checksums

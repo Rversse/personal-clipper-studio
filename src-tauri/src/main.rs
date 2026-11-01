@@ -19,7 +19,7 @@ fn main() {
             if !cfg!(debug_assertions) {
                 let backend_path = app
                     .path()
-                    .resolve("resources/pcs-api.exe", BaseDirectory::Resource)?;
+                    .resolve("resources/pcs-api/pcs-api.exe", BaseDirectory::Resource)?;
                 if !backend_path.is_file() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::NotFound,

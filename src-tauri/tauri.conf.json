@@ -34,7 +34,7 @@
     "shortDescription": "Local-first video clipping workspace",
     "category": "Video",
     "resources": [
-      "resources/pcs-api.exe"
+      "resources/pcs-api/"
     ]
   }
 }

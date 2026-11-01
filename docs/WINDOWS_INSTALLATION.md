@@ -2,7 +2,7 @@
 
 ## What the preview installer contains
 
-The Windows CI artifact contains the Tauri desktop application and a self-contained FastAPI service executable. The service executable includes the Python runtime and CPU `faster-whisper` dependencies. Python does not need to be installed separately.
+The Windows CI artifact contains the Tauri desktop application and a self-contained FastAPI service directory. The bundled service includes the Python runtime and CPU `faster-whisper` dependencies; Python does not need to be installed separately.
 
 The installer is an unsigned preview build. Windows SmartScreen may show an unknown-publisher warning. Do not treat this CI artifact as a production-signed release.
 
@@ -37,4 +37,4 @@ The bundled transcription engine is the CPU build. CUDA/cuDNN is not bundled. NV
 
 ## CI smoke-test scope
 
-The Windows workflow builds the backend executable on Windows, starts it on a temporary loopback port, verifies its health response, and then creates NSIS and MSI packages. This validates the packaged Python service and installer build steps; it is not a substitute for installing and exercising both installers on a separate clean Windows machine.
+The Windows workflow builds the backend directory on Windows, starts its executable on a temporary loopback port, verifies health, creates and lists a test project in SQLite, and checks clean process termination before creating NSIS and MSI packages. This validates the packaged backend and installer build steps; it is not a substitute for installing and exercising both installers on a separate clean Windows machine.
