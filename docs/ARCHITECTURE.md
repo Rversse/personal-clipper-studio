@@ -49,6 +49,7 @@ Import → probe metadata → transcribe → discover candidate moments → user
 
 - The API binds to `127.0.0.1` only.
 - Packaged startup checks that the API port is free before launching the child.
+- The Tauri WebView Content Security Policy restricts resources to the packaged app and the explicit local API endpoints; it also disables embedded objects, framing, and form submissions to external origins.
 - API keys must be supplied by the user and stored outside source control.
 - Users must own or have permission to process source video. No arbitrary third-party YouTube downloading is assumed.
 
