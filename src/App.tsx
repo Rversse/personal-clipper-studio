@@ -223,6 +223,7 @@ function App() {
       setGeminiSettings(payload as GeminiSettings);
       setGeminiKeyInput("");
       setGeminiKeyMessage("API key tersimpan di Windows Credential Manager.");
+      void loadRuntimeDiagnostics();
     } catch (e) {
       setGeminiKeyError(e instanceof Error ? e.message : "Gagal menyimpan Gemini API key.");
     } finally {
@@ -242,6 +243,7 @@ function App() {
       setGeminiSettings(payload as GeminiSettings);
       setGeminiKeyInput("");
       setGeminiKeyMessage("API key dihapus dari Windows Credential Manager.");
+      void loadRuntimeDiagnostics();
     } catch (e) {
       setGeminiKeyError(e instanceof Error ? e.message : "Gagal menghapus Gemini API key.");
     } finally {
