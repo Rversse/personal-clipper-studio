@@ -192,3 +192,29 @@ def test_gemini_model_metadata_network_error_is_safe(monkeypatch):
     assert result["success"] is False
     assert result["status"] == "unreachable"
     assert "sensitive transport detail" not in result["message"]
+
+
+
+def test_gemini_key_request_body_is_bounded_and_not_reflected():
+    secret = "private-" + ("z" * 5000)
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/settings/ai/gemini-key",
+            content='{"api_key":"' + secret + '"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 413
+    assert secret not in response.text
+
+
+def test_gemini_key_request_rejects_non_string_without_echoing_payload():
+    secret = "private-non-string-secret"
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/settings/ai/gemini-key",
+            json={"api_key": {"unexpected": secret}},
+        )
+
+    assert response.status_code == 422
+    assert secret not in response.text
