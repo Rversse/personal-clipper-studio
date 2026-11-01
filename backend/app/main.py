@@ -923,7 +923,7 @@ def run_discovery_job(job_id: str) -> None:
                 (job["transcription_id"],),
             ).fetchall()
             media = connection.execute(
-                "SELECT stored_name,duration FROM media_assets WHERE id=?",
+                "SELECT id,stored_name,duration FROM media_assets WHERE id=?",
                 (job["media_id"],),
             ).fetchone()
         words_by_segment: dict[int, list[dict]] = {}
