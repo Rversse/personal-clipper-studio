@@ -359,7 +359,11 @@ def media_file(asset_id: str, thumbnail: bool = False) -> tuple[Path, str]:
         media_type = "image/jpeg"
     else:
         path = MEDIA_DIR / row["stored_name"]
-        media_type = row["mime_type"]
+        # Do not trust MIME metadata persisted by older app versions; it may
+        # have originated from the untrusted multipart Content-Type header.
+        media_type = VIDEO_MEDIA_TYPES.get(path.suffix.lower())
+        if media_type is None:
+            raise HTTPException(status_code=415, detail="Tipe media tersimpan tidak didukung.")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File media tidak ditemukan di penyimpanan.")
     return path, media_type
