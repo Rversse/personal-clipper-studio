@@ -27,8 +27,8 @@ The frontend retries the health endpoint while the service is starting and conti
 5. Persist project metadata locally in SQLite. Keep API credentials outside source control; operating-system credential-store integration remains future work.
 6. Run transcription and rendering as background jobs with explicit state and cancellation.
 7. On restart, requeue interrupted exports from persisted render settings; retain a final MP4 only when the renderer's atomic commit left a valid MP4 signature, and clean job-scoped temporary artifacts before retrying.
-7. AI output is advisory. Every candidate is reviewed by the user before export.
-8. Keep media processing provider-independent so FFmpeg and transcription engines can be replaced.
+8. AI output is advisory. Every candidate is reviewed by the user before export.
+9. Keep media processing provider-independent so FFmpeg and transcription engines can be replaced.
 
 ## Processing pipeline
 
