@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-import mimetypes
 import json
 import os
 import re
