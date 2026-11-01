@@ -842,11 +842,13 @@ async def start_export(
             "crop_zoom": payload.crop_zoom if segment.crop_zoom is None else segment.crop_zoom,
             "crop_x": payload.crop_x if segment.crop_x is None else segment.crop_x,
             "crop_y": payload.crop_y if segment.crop_y is None else segment.crop_y,
+            "audio_volume": payload.audio_volume if segment.audio_volume is None else segment.audio_volume,
         }
         for segment in payload.clip_segments
     ] or [{
         "start": payload.start_seconds, "end": payload.end_seconds,
         "crop_zoom": payload.crop_zoom, "crop_x": payload.crop_x, "crop_y": payload.crop_y,
+        "audio_volume": payload.audio_volume,
     }]
     for segment in clip_segments:
         if segment["end"] <= segment["start"]:
