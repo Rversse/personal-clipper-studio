@@ -17,6 +17,72 @@ class RenderError(RuntimeError):
     pass
 
 
+class RenderCancelled(RenderError):
+    """Raised when an export job is explicitly cancelled."""
+
+
+class RenderControl:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancelled = threading.Event()
+        self._process: subprocess.Popen | None = None
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+        with self._lock:
+            process = self._process
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                    process.wait(timeout=3)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+
+    def check(self) -> None:
+        if self._cancelled.is_set():
+            raise RenderCancelled("Export dibatalkan oleh pengguna.")
+
+    def attach(self, process: subprocess.Popen) -> None:
+        with self._lock:
+            self._process = process
+            cancelled = self._cancelled.is_set()
+        if cancelled and process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+    def detach(self, process: subprocess.Popen) -> None:
+        with self._lock:
+            if self._process is process:
+                self._process = None
+
+
+_CONTROLS_LOCK = threading.Lock()
+_CONTROLS: dict[str, RenderControl] = {}
+
+
+def register_control(job_id: str) -> RenderControl:
+    control = RenderControl()
+    with _CONTROLS_LOCK:
+        _CONTROLS[job_id] = control
+    return control
+
+
+def get_control(job_id: str) -> RenderControl | None:
+    with _CONTROLS_LOCK:
+        return _CONTROLS.get(job_id)
+
+
+def unregister_control(job_id: str) -> None:
+    with _CONTROLS_LOCK:
+        _CONTROLS.pop(job_id, None)
+
+
 SUBTITLE_STYLES = {
     "clean": {"font": "Arial", "size": 52, "primary": "&H00FFFFFF", "outline": "&HCC000000", "bold": 0, "border": 2, "shadow": 1, "margin": 100},
     "bold": {"font": "Arial", "size": 62, "primary": "&H00FFFFFF", "outline": "&H00000000", "bold": 1, "border": 4, "shadow": 2, "margin": 110},
