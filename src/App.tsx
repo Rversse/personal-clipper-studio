@@ -117,6 +117,7 @@ function App() {
   } | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [editorSaved, setEditorSaved] = useState(false);
+  const [editorDraftReadyMediaId, setEditorDraftReadyMediaId] = useState("");
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [exportBusy, setExportBusy] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
@@ -593,9 +594,21 @@ function App() {
         setSubtitleOutline(Math.max(0, Math.min(8, parsed.subtitleOutline ?? 2)));
         setSubtitleBackground(Math.max(0, Math.min(90, parsed.subtitleBackground ?? 0)));
         setSplitPoints(parsed.splits ?? []);
+        const sourceDuration = Math.max(0, media.find(item => item.id === aiMediaId)?.duration ?? 0);
         const restoredSequence = Array.isArray(parsed.sequence)
-          ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start)
-            .map(item => ({ ...item, audio_volume: Number.isFinite(item.audio_volume) ? Math.max(0, Math.min(2, item.audio_volume!)) : 1 }))
+          ? parsed.sequence.filter(item => item && Number.isFinite(item.start) && Number.isFinite(item.end)
+              && item.start >= 0 && item.end > item.start && (sourceDuration <= 0 || item.start < sourceDuration))
+            .map(item => ({
+              ...item,
+              start: Math.max(0, item.start),
+              end: sourceDuration > 0 ? Math.min(item.end, sourceDuration) : item.end,
+              crop_zoom: Number.isFinite(item.crop_zoom) ? Math.max(1, Math.min(3, item.crop_zoom!)) : 1,
+              crop_x: Number.isFinite(item.crop_x) ? Math.max(0, Math.min(1, item.crop_x!)) : 0.5,
+              crop_y: Number.isFinite(item.crop_y) ? Math.max(0, Math.min(1, item.crop_y!)) : 0.5,
+              audio_volume: Number.isFinite(item.audio_volume) ? Math.max(0, Math.min(2, item.audio_volume!)) : 1
+            }))
+            .filter(item => item.end - item.start >= 0.5)
+            .slice(0, 100)
           : [];
         setClipSequence(restoredSequence);
         const restoredIndex = Number.isInteger(parsed.selectedSequenceIndex) && parsed.selectedSequenceIndex! >= 0 && parsed.selectedSequenceIndex! < restoredSequence.length ? parsed.selectedSequenceIndex! : null;
@@ -632,7 +645,33 @@ function App() {
     }
     setEditorCandidateId("");
     setEditorSaved(false);
+    setEditorDraftReadyMediaId(aiMediaId);
   }, [aiMediaId, media]);
+
+  useEffect(() => {
+    if (!aiMediaId || editorDraftReadyMediaId !== aiMediaId || editEnd <= editStart) return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
+          start: editStart, end: editEnd, ratio: aspectRatio, outputPreset, qualityProfile,
+          frameRate, normalizeAudio, texts: subtitleText, subtitleTiming, preset: subtitlePreset,
+          splits: splitPoints, sequence: clipSequence, selectedSequenceIndex, cropZoom, cropX,
+          cropY, audioVolume, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
+        }));
+        setEditorSaved(true);
+        const savedTimer = window.setTimeout(() => setEditorSaved(false), 1800);
+        return () => window.clearTimeout(savedTimer);
+      } catch {
+        setError("Draft editor tidak dapat disimpan ke penyimpanan lokal browser.");
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    aiMediaId, editorDraftReadyMediaId, editStart, editEnd, aspectRatio, outputPreset,
+    qualityProfile, frameRate, normalizeAudio, subtitleText, subtitleTiming, subtitlePreset,
+    splitPoints, clipSequence, selectedSequenceIndex, cropZoom, cropX, cropY, audioVolume,
+    subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
+  ]);
 
   useEffect(() => {
     if (editEnd > 0 || !transcription?.segments?.length) return;
@@ -684,12 +723,14 @@ function App() {
   }
 
   function addSplitRangesToSequence() {
+    const availableSlots = 100 - clipSequence.length;
     const points = splitPoints.filter(point => point > editStart && point < editEnd).sort((a,b)=>a-b);
-    if (!points.length) return;
+    if (!points.length || availableSlots <= 0) return;
     const boundaries = [editStart, ...points, editEnd];
     const ranges = boundaries.slice(0, -1).map((start, index) => ({
       start, end: boundaries[index + 1], crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: audioVolume
-    }));
+    })).slice(0, availableSlots);
+    if (!ranges.length) return;
     const nextIndex = clipSequence.length;
     setClipSequence(previous => [...previous, ...ranges].slice(0, 100));
     setSelectedSequenceIndex(nextIndex);
