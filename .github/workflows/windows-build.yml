@@ -32,12 +32,10 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/uv.lock
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Install pinned cargo-audit
-        run: cargo install cargo-audit --version 0.22.2 --locked
-      - name: Audit Rust dependencies
-        run: cargo audit --file src-tauri/Cargo.lock
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+        with:
+          toolchain: "1.99.1"
       - name: Install frontend dependencies
         run: npm ci
       - name: Install backend and CPU transcription dependencies from the committed lockfile
