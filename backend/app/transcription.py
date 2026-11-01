@@ -45,6 +45,7 @@ def transcribe_file(
         segment_start = float(segment.start)
         segment_end = float(segment.end)
         normalized_words: list[dict[str, Any]] = []
+        previous_word_end = segment_start
         for word in getattr(segment, "words", None) or []:
             try:
                 word_start = float(word.start)
@@ -56,7 +57,7 @@ def transcribe_file(
                     word_text
                     and math.isfinite(word_start)
                     and math.isfinite(word_end)
-                    and segment_start <= word_start < word_end <= segment_end
+                    and segment_start <= previous_word_end <= word_start < word_end <= segment_end
                     and (probability is None or math.isfinite(probability) and 0 <= probability <= 1)
                 ):
                     normalized_words.append({
@@ -65,6 +66,7 @@ def transcribe_file(
                         "text": word_text,
                         "probability": probability,
                     })
+                    previous_word_end = word_end
             except (TypeError, ValueError, OverflowError):
                 continue
         results.append({

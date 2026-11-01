@@ -222,10 +222,13 @@ function Wait-ForUninstall {
     param([int]$TimeoutSeconds = 30)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
-        if ($null -eq (Find-InstalledApp)) { return }
+        $registered = @(Get-UninstallEntries)
+        $installed = Find-InstalledApp
+        if ($registered.Count -eq 0 -and $null -eq $installed) { return }
         Start-Sleep -Milliseconds 500
     }
-    throw "Personal Clipper Studio still appears installed after the uninstall command."
+    $names = @(Get-UninstallEntries | ForEach-Object { $_.PSObject.Properties["DisplayName"].Value }) -join "; "
+    throw "Personal Clipper Studio still has installed files or uninstall registry entries: $names"
 }
 
 try {

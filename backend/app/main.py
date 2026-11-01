@@ -304,6 +304,8 @@ def word_timing_matches_segment_text(segment_text: str, words: list[dict]) -> bo
 
 def transcription_payload(job_id: str) -> dict:
     with get_connection() as connection:
+        # Keep job, segments, and word rows on one consistent SQLite snapshot.
+        connection.execute("BEGIN")
         job = connection.execute(
             "SELECT * FROM transcription_jobs WHERE id=?", (job_id,)
         ).fetchone()
@@ -362,6 +364,7 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
                 )
                 segment_id = cursor.lastrowid
                 valid_words = []
+                previous_word_end = float(item["start"])
                 for word in item.get("words", []):
                     try:
                         start = float(word["start"])
@@ -374,12 +377,13 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
                             word_text
                             and math.isfinite(start)
                             and math.isfinite(end)
-                            and item["start"] <= start < end <= item["end"]
+                            and item["start"] <= previous_word_end <= start < end <= item["end"]
                             and (probability is None or math.isfinite(probability) and 0 <= probability <= 1)
                         ):
                             valid_words.append((
                                 job_id, segment_id, len(valid_words), start, end, word_text, probability
                             ))
+                            previous_word_end = end
                     except (KeyError, TypeError, ValueError, OverflowError):
                         continue
                 connection.executemany(
@@ -456,6 +460,8 @@ async def update_transcript_word(
     if not payload.text.strip():
         raise HTTPException(status_code=422, detail="Teks kata tidak boleh kosong.")
     with get_connection() as connection:
+        # Serialize adjacent-word validation and update to prevent concurrent overlap.
+        connection.execute("BEGIN IMMEDIATE")
         segment = connection.execute(
             "SELECT start,end FROM transcript_segments WHERE id=? AND job_id=?",
             (segment_id, job_id),

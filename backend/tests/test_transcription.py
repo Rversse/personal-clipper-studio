@@ -204,6 +204,7 @@ def test_transcribe_file_enables_and_normalizes_word_timestamps(monkeypatch, tmp
                 words=[
                     SimpleNamespace(start=0.1, end=0.45, word=" Halo", probability=0.98),
                     SimpleNamespace(start=0.5, end=0.9, word=" dunia.", probability=0.95),
+                    SimpleNamespace(start=0.5, end=0.75, word="duplicate", probability=0.8),
                     SimpleNamespace(start=float("nan"), end=1.0, word="invalid", probability=0.8),
                     SimpleNamespace(start=1.0, end=1.1, word="bad-confidence", probability=1.5),
                 ],
