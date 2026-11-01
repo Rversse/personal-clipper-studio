@@ -64,6 +64,7 @@
 - [x] Local runtime diagnostics API for FFmpeg/FFprobe, Whisper availability, and AI provider configuration without exposing credentials or claiming an untested provider connection
 - [x] Desktop System Check page for required/optional software, detection status, installation notes, and official download links; refreshable after installation
 - [x] Loopback-only Ollama server/model readiness check with explicit missing-model and unreachable states
+- [x] Whisper model cache detection and selected-model disk-space preflight; block a new transcription when known free space is below the estimated download plus a 512 MB reserve
 - [ ] Error recovery and cancellation
 - [x] Windows NSIS/MSI CI packaging with a PyInstaller-bundled FastAPI service, packaged-runtime health/SQLite smoke test, and silent installer install/launch/API/SQLite/uninstall validation on a hosted Windows runner
 - [x] Tauri-managed Windows backend startup/shutdown, loopback binding, port-collision guard, and persistent backend log
