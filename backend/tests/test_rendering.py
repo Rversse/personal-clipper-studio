@@ -579,3 +579,37 @@ def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
         assert client.post(f"/api/exports/{job_id}/cancel").status_code == 409
+
+
+def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "_EXPORT_WORKER_WAKE", type("NoWake", (), {"set": lambda self: None})())
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 20},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+        cancelled = client.post(f"/api/exports/{job_id}/cancel")
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert client.post(f"/api/exports/{job_id}/cancel").status_code == 409
+
+
+def test_execute_honors_pre_cancelled_control(monkeypatch):
+    control = rendering.RenderControl()
+    control.cancel()
+    monkeypatch.setattr(
+        rendering.subprocess, "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("FFmpeg must not start")),
+    )
+    try:
+        rendering._execute(["ffmpeg"], 10, None, control)
+    except rendering.RenderCancelled:
+        pass
+    else:
+        raise AssertionError("Pre-cancelled render must stop before spawning FFmpeg")
