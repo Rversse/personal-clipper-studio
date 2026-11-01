@@ -130,7 +130,7 @@ def main() -> int:
             )
             if process.stdin is None:
                 raise RuntimeError("Packaged backend session pipe was not created.")
-            process.stdin.write(f"session:{session_token}\\n")
+            process.stdin.write(f"session:{session_token}\n")
             process.stdin.flush()
             base_url = f"http://127.0.0.1:{port}"
             try:
