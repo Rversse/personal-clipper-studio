@@ -23,12 +23,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout full Git history
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Scan all refs and Git history with Gitleaks
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/repo" \
-            ghcr.io/gitleaks/gitleaks:latest \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
             detect --source=/repo --log-opts=--all --redact --verbose
