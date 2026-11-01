@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--self-check-runtime",
         action="store_true",
-        help="Import-check the bundled CPU transcription dependencies, then exit.",
+        help="Import-check the bundled CPU transcription and Windows credential-store dependencies, then exit.",
     )
     arguments = parser.parse_args(argv)
 
@@ -48,6 +48,10 @@ def main(argv: list[str] | None = None) -> None:
             import tokenizers
             import faster_whisper
             from faster_whisper import WhisperModel  # noqa: F401
+            if sys.platform == "win32":
+                from keyring.backends.Windows import WinVaultKeyring
+
+                WinVaultKeyring()
         except (ImportError, OSError) as error:
             raise SystemExit(
                 f"Packaged transcription runtime is incomplete: {error}"
