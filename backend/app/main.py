@@ -5,6 +5,7 @@ import mimetypes
 import json
 import os
 import uuid
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,19 +21,36 @@ from .schemas import (
 )
 from . import ai_discovery, transcription, rendering
 
+_EXPORT_WORKER_LOCK = threading.Lock()
+_EXPORT_WORKER_WAKE = threading.Event()
+_EXPORT_WORKER_THREAD: threading.Thread | None = None
+_EXPORT_WORKER_STOP = threading.Event()
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_storage()
     timestamp = now_iso()
     with get_connection() as connection:
-        for table in ("transcription_jobs", "discovery_jobs", "export_jobs"):
+        for table in ("transcription_jobs", "discovery_jobs"):
             connection.execute(
                 f"""UPDATE {table} SET status='failed',
                     error='Proses terhenti karena aplikasi sebelumnya ditutup.',
                     updated_at=? WHERE status IN ('queued','processing')""",
                 (timestamp,),
             )
+        connection.execute(
+            """UPDATE export_jobs SET status='failed',
+               error='Rendering terputus karena aplikasi sebelumnya ditutup.',
+               updated_at=? WHERE status='processing'""",
+            (timestamp,),
+        )
+    _EXPORT_WORKER_STOP.clear()
+    start_export_worker()
     yield
+    _EXPORT_WORKER_STOP.set()
+    _EXPORT_WORKER_WAKE.set()
+    if _EXPORT_WORKER_THREAD is not None:
+        _EXPORT_WORKER_THREAD.join(timeout=5)
 
 
 app = FastAPI(
@@ -675,6 +693,8 @@ def export_payload(job_id: str) -> dict:
 
 
 def run_export_job(job_id: str, source_path: str, destination_path: str) -> None:
+    control = rendering.register_control(job_id)
+
     def update_progress(value: float) -> None:
         with get_connection() as connection:
             connection.execute(
@@ -684,16 +704,17 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
 
     try:
         with get_connection() as connection:
-            job = connection.execute(
-                "SELECT * FROM export_jobs WHERE id=?", (job_id,)
-            ).fetchone()
-            if job is None:
+            job = connection.execute("SELECT * FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None or job["status"] != "queued":
+                return
+            claimed = connection.execute(
+                "UPDATE export_jobs SET status='processing', updated_at=? WHERE id=? AND status='queued'",
+                (now_iso(), job_id),
+            ).rowcount
+            if not claimed:
                 return
             job_data = dict(job)
-            connection.execute(
-                "UPDATE export_jobs SET status='processing', updated_at=? WHERE id=?",
-                (now_iso(), job_id),
-            )
+        control.check()
         subtitle_payload = job_data.get("subtitle_payload")
         clip_segments = json.loads(job_data["clip_segments"]) if job_data.get("clip_segments") else [
             {"start": float(job_data["start_seconds"]), "end": float(job_data["end_seconds"])}
@@ -707,21 +728,89 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
             crop_zoom=float(job_data.get("crop_zoom") or 1.0),
             crop_x=float(job_data.get("crop_x") if job_data.get("crop_x") is not None else 0.5),
             crop_y=float(job_data.get("crop_y") if job_data.get("crop_y") is not None else 0.5),
+            control=control,
         )
+        control.check()
         with get_connection() as connection:
             connection.execute(
                 """UPDATE export_jobs SET status='completed', progress=1,
-                   encoder=?, error=NULL, updated_at=? WHERE id=?""",
+                   encoder=?, error=NULL, updated_at=? WHERE id=? AND status='processing'""",
                 (result["encoder"], now_iso(), job_id),
+            )
+    except rendering.RenderCancelled:
+        Path(destination_path).unlink(missing_ok=True)
+        with get_connection() as connection:
+            connection.execute(
+                """UPDATE export_jobs SET status='cancelled', error='Export dibatalkan oleh pengguna.',
+                   updated_at=? WHERE id=? AND status IN ('queued','processing')""",
+                (now_iso(), job_id),
             )
     except Exception as error:
         Path(destination_path).unlink(missing_ok=True)
         with get_connection() as connection:
             connection.execute(
                 """UPDATE export_jobs SET status='failed', error=?, updated_at=?
-                   WHERE id=?""",
+                   WHERE id=? AND status='processing'""",
                 (str(error)[:3000], now_iso(), job_id),
             )
+    finally:
+        rendering.unregister_control(job_id)
+
+
+def _export_worker_loop() -> None:
+    while not _EXPORT_WORKER_STOP.is_set():
+        with get_connection() as connection:
+            job = connection.execute(
+                """SELECT e.id, e.output_name, m.stored_name
+                   FROM export_jobs e JOIN media_assets m ON m.id=e.media_id
+                   WHERE e.status='queued' ORDER BY e.created_at ASC LIMIT 1"""
+            ).fetchone()
+        if job is None:
+            _EXPORT_WORKER_WAKE.wait(timeout=1.0)
+            _EXPORT_WORKER_WAKE.clear()
+            continue
+        run_export_job(job["id"], str(MEDIA_DIR / job["stored_name"]), str(EXPORT_DIR / job["output_name"]))
+
+
+def start_export_worker() -> None:
+    global _EXPORT_WORKER_THREAD
+    with _EXPORT_WORKER_LOCK:
+        if _EXPORT_WORKER_THREAD is not None and _EXPORT_WORKER_THREAD.is_alive():
+            _EXPORT_WORKER_WAKE.set()
+            return
+        _EXPORT_WORKER_THREAD = threading.Thread(target=_export_worker_loop, name="pcs-export-worker", daemon=True)
+        _EXPORT_WORKER_THREAD.start()
+    _EXPORT_WORKER_WAKE.set()
+
+
+def cancel_export_job(job_id: str) -> None:
+    with get_connection() as connection:
+        row = connection.execute("SELECT status FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Export tidak ditemukan.")
+        if row["status"] in ("completed", "failed", "cancelled"):
+            raise HTTPException(status_code=409, detail="Export sudah selesai dan tidak dapat dibatalkan.")
+        if row["status"] == "queued":
+            connection.execute(
+                """UPDATE export_jobs SET status='cancelled',
+                   error='Export dibatalkan sebelum rendering dimulai.', updated_at=?
+                   WHERE id=? AND status='queued'""",
+                (now_iso(), job_id),
+            )
+            return
+    control = rendering.get_control(job_id)
+    if control is not None:
+        control.cancel()
+    else:
+        with get_connection() as connection:
+            connection.execute(
+                """UPDATE export_jobs SET status='cancelled',
+                   error='Export dibatalkan sebelum proses rendering aktif.', updated_at=?
+                   WHERE id=? AND status='processing'""",
+                (now_iso(), job_id),
+            )
+
+
 
 
 @app.post("/api/media/{asset_id}/exports", response_model=ExportResponse, status_code=202)
