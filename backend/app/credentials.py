@@ -45,11 +45,14 @@ def get_gemini_api_key() -> str | None:
     """Environment configuration takes precedence over the per-user vault secret."""
     environment_key = os.environ.get("PCS_GEMINI_API_KEY", "").strip()
     if environment_key:
-        return environment_key
+        return validate_api_key(environment_key)
     try:
-        return _windows_backend().get_password(SERVICE_NAME, ACCOUNT_NAME)
+        stored_key = _windows_backend().get_password(SERVICE_NAME, ACCOUNT_NAME)
+        return validate_api_key(stored_key) if stored_key else None
     except CredentialStoreUnavailable:
         return None
+    except ValueError as error:
+        raise CredentialStoreError("Gemini API key tersimpan memiliki format yang tidak valid.") from error
     except Exception as error:
         raise CredentialStoreError(
             "Tidak dapat membaca Gemini API key dari Windows Credential Manager."
