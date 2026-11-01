@@ -74,7 +74,8 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     session_token = None
-    if arguments.require_session:
+    require_session = arguments.require_session or bool(getattr(sys, "frozen", False))
+    if require_session:
         first_line = sys.stdin.readline()
         if not first_line.startswith("session:"):
             raise SystemExit("The desktop session handshake is missing.")
