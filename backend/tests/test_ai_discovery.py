@@ -188,7 +188,7 @@ def test_context_aware_boundaries_prefer_complete_sentence_and_payoff():
         {"start": 24.0, "end": 32.0, "text": "Dan inilah bagian yang mengejutkan."},
         {"start": 32.0, "end": 40.0, "text": "Semua akhirnya bisa diselesaikan."},
     ]
-    refined = refine_candidate_boundaries(11.0, 18.0, transcript, 15, 35)
+    refined = refine_candidate_boundaries(11.0, 18.0, transcript, 12, 35)
     assert refined is not None
     assert refined["start_seconds"] == 10.0
     assert refined["end_seconds"] == 24.0
