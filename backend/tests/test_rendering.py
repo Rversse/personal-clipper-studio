@@ -91,7 +91,7 @@ def test_recovery_keeps_atomically_committed_mp4_and_marks_job_completed(tmp_pat
     output_name = f"clip-{job_id}.mp4"
     destination = database.EXPORT_DIR / output_name
     _seed_interrupted_export(job_id, output_name)
-    destination.write_bytes(b"\\x00\\x00\\x00\\x18ftypisom" + b"x" * 1200)
+    destination.write_bytes(bytes([0, 0, 0, 24]) + b"ftypisom" + b"x" * 1200)
 
     main_module.recover_interrupted_exports()
 
