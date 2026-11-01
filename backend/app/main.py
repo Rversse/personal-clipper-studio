@@ -118,13 +118,11 @@ def _cancel_background_jobs() -> None:
             )
 
 def _is_completed_export(path: Path) -> bool:
-    """A final output is committed atomically by the renderer; verify its MP4 signature."""
+    """Only treat an interrupted export as complete when FFprobe can read its MP4."""
     try:
-        if not path.is_file() or path.stat().st_size < 1024:
-            return False
-        with path.open("rb") as output:
-            return b"ftyp" in output.read(32)
-    except OSError:
+        rendering.validate_mp4_output(path)
+        return True
+    except (rendering.RenderError, OSError):
         return False
 
 
