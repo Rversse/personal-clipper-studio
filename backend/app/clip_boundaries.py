@@ -69,6 +69,9 @@ def _opening_signal(segments: list[dict[str, Any]], index: int) -> tuple[int, st
 
     if current[:1].isupper():
         score += 5
+    elif current[:1].islower():
+        score -= 20
+        reasons.append("melanjutkan kalimat sebelumnya")
     if _starts_continuation(current):
         score -= 22
         reasons.append("dimulai dengan kata sambung")
