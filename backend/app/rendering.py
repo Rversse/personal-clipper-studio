@@ -21,6 +21,14 @@ class RenderCancelled(RenderError):
     """Raised when an export job is explicitly cancelled."""
 
 
+QUALITY_PROFILES = {
+    "balanced": {"cpu_preset": "medium", "cpu_crf": "20", "nvenc_preset": "p5", "nvenc_cq": "23"},
+    "high": {"cpu_preset": "slow", "cpu_crf": "18", "nvenc_preset": "p6", "nvenc_cq": "20"},
+    "maximum": {"cpu_preset": "slower", "cpu_crf": "15", "nvenc_preset": "p7", "nvenc_cq": "17"},
+}
+FRAME_RATES = (24, 30, 60)
+
+
 class RenderControl:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -222,6 +230,9 @@ def build_render_command(
     crop_y: float = 0.5,
     audio_volume: float = 1.0,
     subtitle_style: dict | None = None,
+    quality_profile: str = "balanced",
+    frame_rate: int | None = 30,
+    normalize_audio: bool = False,
 ) -> list[str]:
     if aspect_ratio not in OUTPUT_SIZES:
         raise RenderError("Rasio aspek tidak didukung.")
@@ -234,6 +245,10 @@ def build_render_command(
         raise RenderError("Pengaturan crop/zoom berada di luar batas.")
     if not math.isfinite(audio_volume) or not 0.0 <= audio_volume <= 2.0:
         raise RenderError("Volume audio harus berada pada rentang 0 sampai 2.")
+    if quality_profile not in QUALITY_PROFILES:
+        raise RenderError("Profil kualitas export tidak didukung.")
+    if frame_rate is not None and frame_rate not in FRAME_RATES:
+        raise RenderError("Frame rate export harus 24, 30, 60, atau mengikuti source.")
     video_filter = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop=w={width}/({crop_zoom:.4f}):h={height}/({crop_zoom:.4f}):"
@@ -241,6 +256,8 @@ def build_render_command(
         f"y=(ih-{height}/({crop_zoom:.4f}))*{crop_y:.4f},"
         f"scale={width}:{height},setsar=1"
     )
+    if frame_rate is not None:
+        video_filter += f",fps={frame_rate}"
     if subtitle_path is not None:
         if subtitle_preset not in SUBTITLE_STYLES:
             raise RenderError("Preset subtitle tidak didukung.")
@@ -252,12 +269,18 @@ def build_render_command(
         "-map", "0:v:0", "-map", "0:a:0?",
         "-vf", video_filter, "-pix_fmt", "yuv420p",
     ]
+    audio_filters = []
     if audio_volume != 1.0:
-        command += ["-af", f"volume={audio_volume:.4f}"]
+        audio_filters.append(f"volume={audio_volume:.4f}")
+    if normalize_audio:
+        audio_filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+    if audio_filters:
+        command += ["-af", ",".join(audio_filters)]
+    quality = QUALITY_PROFILES[quality_profile]
     if encoder == "h264_nvenc":
-        command += ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "23", "-b:v", "0"]
+        command += ["-c:v", "h264_nvenc", "-preset", quality["nvenc_preset"], "-cq", quality["nvenc_cq"], "-b:v", "0"]
     elif encoder == "libx264":
-        command += ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
+        command += ["-c:v", "libx264", "-preset", quality["cpu_preset"], "-crf", quality["cpu_crf"]]
     else:
         raise RenderError("Video encoder tidak didukung.")
     command += [
@@ -375,6 +398,9 @@ def render_clip(
     audio_volume: float = 1.0,
     subtitle_style: dict | None = None,
     control: RenderControl | None = None,
+    quality_profile: str = "balanced",
+    frame_rate: int | None = 30,
+    normalize_audio: bool = False,
 ) -> dict[str, str]:
     if control:
         control.check()
@@ -403,7 +429,8 @@ def render_clip(
             subtitle_file.write_text(build_ass_content(subtitle_segments, start_seconds, end_seconds, subtitle_preset, aspect_ratio), encoding="utf-8-sig")
         command = build_render_command(
             source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-            subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, audio_volume, subtitle_style
+            subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, audio_volume, subtitle_style,
+            quality_profile, frame_rate, normalize_audio,
         )
         try:
             _execute(command, duration, progress, control)
@@ -414,7 +441,8 @@ def render_clip(
             encoder = "libx264"
             cpu_command = build_render_command(
                 source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
-                subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, audio_volume, subtitle_style
+                subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, audio_volume, subtitle_style,
+                quality_profile, frame_rate, normalize_audio,
             )
             _execute(cpu_command, duration, progress, control)
         if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
@@ -446,6 +474,9 @@ def render_sequence(
     audio_volume: float = 1.0,
     subtitle_style: dict | None = None,
     control: RenderControl | None = None,
+    quality_profile: str = "balanced",
+    frame_rate: int | None = 30,
+    normalize_audio: bool = False,
 ) -> dict[str, str]:
     if control:
         control.check()
@@ -510,6 +541,7 @@ def render_sequence(
                 subtitle_preset=subtitle_preset,
                 crop_zoom=segment['crop_zoom'], crop_x=segment['crop_x'], crop_y=segment['crop_y'],
                 audio_volume=segment['audio_volume'], subtitle_style=subtitle_style, control=control,
+                quality_profile=quality_profile, frame_rate=frame_rate, normalize_audio=normalize_audio,
             )
             encoders.append(result["encoder"])
             completed_duration += end - start
