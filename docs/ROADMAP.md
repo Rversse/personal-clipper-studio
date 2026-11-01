@@ -23,6 +23,7 @@
 
 ## Phase 4 — editing and subtitles (partial)
 - [x] Single-clip trim range, split markers, and local edit draft
+- [x] Debounced automatic editor-draft persistence with guarded restore and validation of restored clip sequences
 - [x] 9:16, 16:9, and 1:1 export framing controls
 - [x] Transcript text editing and visual subtitle presets
 - [x] Optional FFmpeg ASS subtitle burn-in with edited transcript text
@@ -40,15 +41,20 @@
 - [ ] Separate audio sources, audio fades, and full independent audio-track assembly
 - [x] Context-aware AI candidate boundary refinement using punctuation, natural pauses, conjunction and sentence-continuation signals
 - [x] Persist/display boundary quality score and opening/ending rationale on candidates
-- [ ] Word-level boundary alignment and prosody-aware semantic cut detection
+- [x] Word-level transcription timestamps, persistence, API exposure, and per-word Subtitle Studio timing corrections
+- [x] Word-level timeline visualization with direct drag/trim editing, server persistence, and segment-level fallback
+- [x] Word-level candidate boundary alignment with punctuation, pause, conjunction, and duration constraints; segment fallback when word timestamps are unavailable or invalid
+- [x] Best-effort FFmpeg audio analysis for natural silence intervals and timestamped RMS energy envelope, integrated into candidate boundary scoring
+- [ ] Pitch/F0, speech-rate, and richer prosodic emphasis analysis
 
 ## Phase 5 — rendering and delivery (partial)
 - [x] Single-clip and ordered multi-clip FFmpeg H.264 MP4 render pipeline with atomic output replacement
+- [x] Automated FFmpeg end-to-end integration test using generated video/audio, verifying 9:16 1080×1920 H.264/AAC output and rendered duration
 - [x] NVENC attempt with automatic libx264 CPU fallback on encoder failure
 - [x] Persistent export job records, status endpoint, history, and completed-file download
 - [x] Live FFmpeg progress streamed into persistent export job status
 - [x] Persistent single-worker queue for multiple export jobs, serial execution, queued/active cancellation, subprocess termination, and temporary-file cleanup
-- [ ] Automatic resumption of interrupted active renders after a crash
+- [x] Automatic recovery of interrupted renders: restart incomplete jobs from persisted settings, preserve atomically completed MP4 outputs, and clean job-scoped temporary artifacts
 - [x] Burned-in subtitle rendering with Clean, Bold, and Highlight presets
 - [x] Platform export profiles for YouTube Shorts, Instagram Reels, Facebook Reels, Square Feed, Landscape, and Custom
 - [x] Balanced / High / Maximum CPU and NVENC quality profiles with configurable source / 24 / 30 / 60 FPS
@@ -56,6 +62,16 @@
 - [ ] Two-pass loudness analysis and per-project export defaults
 
 ## Phase 6 — hardening
-- [ ] Error recovery and cancellation
-- [ ] Windows installer and clean-machine verification
+- [x] Local runtime diagnostics API for FFmpeg/FFprobe, Whisper availability, and AI provider configuration without exposing credentials or claiming an untested provider connection
+- [x] Desktop System Check page for required/optional software, detection status, installation notes, and official download links; refreshable after installation
+- [x] Loopback-only Ollama server/model readiness check with explicit missing-model and unreachable states
+- [x] Whisper model cache detection and selected-model disk-space preflight; block a new transcription when known free space is below the estimated download plus a 512 MB reserve
+- [x] Gemini API key configuration UI with Windows Credential Manager storage, environment-variable precedence, safe status reporting, replace/delete controls, and read-only HTTPS model-access test
+- [x] Windows packaged-runtime smoke test for Credential Manager availability and secret save/read/delete round-trip
+- [x] Export error recovery, queued/active cancellation, and graceful desktop-shutdown cancellation of active FFmpeg renders with regression coverage
+- [x] Backend cancellation API and cooperative cancellation for transcription/discovery jobs, including shutdown persistence and active-job result-discard regression tests
+- [x] AI Workspace cancel controls and retry actions for failed or cancelled transcription/discovery jobs
+- [x] Windows NSIS/MSI CI packaging with a PyInstaller-bundled FastAPI service, packaged-runtime health/SQLite smoke test, and silent installer install/launch/API/SQLite/uninstall validation on a hosted Windows runner
+- [x] Tauri-managed Windows backend startup/shutdown, loopback binding, port-collision guard, and persistent backend log
+- [ ] Install and launch MSI/NSIS on a clean physical Windows machine; verify FFmpeg, CPU Whisper model download, and optional GPU/NVENC behavior
 - [ ] Performance profiling on target hardware

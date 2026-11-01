@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible problem in Personal Clipper Studio.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach API keys, private videos, databases, personal information, or logs containing secrets.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and the expected behavior.
+      placeholder: A clear description of the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: List the steps needed to reproduce the problem.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. Click...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version or commit
+      placeholder: Version number or commit SHA
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Windows 11
+        - Windows 10
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant sanitized logs
+      description: Remove secrets, usernames, local file paths, and private media details before posting.
+      render: text

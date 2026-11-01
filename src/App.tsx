@@ -10,10 +10,15 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
 type Health = "checking" | "online" | "offline";
 type Project = { id: string; name: string; description: string; created_at: string; updated_at: string; media_count: number };
 type Media = { id: string; project_id: string; original_name: string; mime_type: string; file_size: number; duration: number | null; width: number | null; height: number | null; fps: number | null; video_codec: string | null; audio_codec: string | null; thumbnail_url: string | null; preview_url: string; created_at: string };
-type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: {start:number;end:number;text:string}[] };
+type TranscriptWord = { start:number; end:number; text:string; probability:number|null };
+type TranscriptSegment = { id:number|null; start:number; end:number; text:string; words:TranscriptWord[] };
+type Transcription = { id: string; media_id: string; status: string; model_name: string; language: string | null; detected_language: string | null; duration: number | null; progress: number; error: string | null; segments?: TranscriptSegment[] };
 type ClipSegment = { start: number; end: number; crop_zoom?: number; crop_x?: number; crop_y?: number; audio_volume?: number };
 type ExportJob = { id:string; media_id:string; status:string; start_seconds:number; end_seconds:number; aspect_ratio:string; output_name:string; clip_count:number; output_preset?:string; quality_profile?:string; frame_rate?:number|null; normalize_audio?:boolean; encoder:string|null; progress:number; error:string|null; download_url:string|null; created_at:string; updated_at:string };
 type Discovery = { id: string; media_id: string; status: string; progress: number; error: string | null; candidates: {id:string;start_seconds:number;end_seconds:number;title:string;hook:string;summary:string;rationale:string;score:number;category:string;boundary_quality:number;opening_boundary:string;ending_boundary:string;context_note:string}[] };
+type RuntimeDependency = { id:string; name:string; required:boolean; available:boolean; status:string; description:string; download_url:string|null; download_label:string|null; install_note:string };
+type GeminiSettings = { provider:string; model:string|null; configured:boolean; source:string; credential_store_available:boolean; managed_by_environment:boolean };
+type RuntimeDiagnostics = { platform:string; ffmpeg:{available:boolean;version:string|null}; ffprobe:{available:boolean;version:string|null}; dependencies:RuntimeDependency[]; transcription:{installed:boolean;device:string;compute_type:string;model_downloaded:boolean|null;model_preflight:{model:string;downloaded:boolean;cache_configured:boolean;free_bytes:number|null;estimated_download_bytes:number;required_free_bytes:number;disk_space_ok:boolean;disk_space_known:boolean}}; ai:{provider:string;model:string|null;configured:boolean;status:string;ollama_connection:string;ollama_model_available:boolean|null;ollama_models:string[]} };
 
 const navItems = [
   { label: "Overview", icon: Gauge },
@@ -37,6 +42,15 @@ function formatDuration(seconds: number | null) {
 function App() {
   const [active, setActive] = useState("Overview");
   const [health, setHealth] = useState<Health>("checking");
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState("");
+  const [geminiSettings, setGeminiSettings] = useState<GeminiSettings | null>(null);
+  const [geminiSettingsLoading, setGeminiSettingsLoading] = useState(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState("");
+  const [geminiKeyBusy, setGeminiKeyBusy] = useState(false);
+  const [geminiKeyMessage, setGeminiKeyMessage] = useState("");
+  const [geminiKeyError, setGeminiKeyError] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
   const [media, setMedia] = useState<Media[]>([]);
@@ -72,6 +86,9 @@ function App() {
   const [audioVolume, setAudioVolume] = useState(1);
   const [subtitleText, setSubtitleText] = useState<Record<number, string>>({});
   const [subtitleTiming, setSubtitleTiming] = useState<Record<number, { start: number; end: number }>>({});
+  const [wordTiming, setWordTiming] = useState<Record<string, {start:number;end:number;text:string}>>({});
+  const [wordBusy, setWordBusy] = useState<string>("");
+  const wordSaveLockRef = useRef(false);
   const [subtitlePreset, setSubtitlePreset] = useState("clean");
   const [subtitleFontSize, setSubtitleFontSize] = useState(52);
   const [subtitlePosition, setSubtitlePosition] = useState(8);
@@ -92,8 +109,15 @@ function App() {
     index: number; mode: "move" | "start" | "end"; startX: number;
     initialStart: number; initialEnd: number; secondsPerPixel: number;
   } | null>(null);
+  const wordTimingDragRef = useRef<{
+    segment: TranscriptSegment; wordIndex: number;
+    mode: "move" | "start" | "end"; startX: number;
+    initialStart: number; initialEnd: number; secondsPerPixel: number;
+    minStart: number; maxEnd: number;
+  } | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [editorSaved, setEditorSaved] = useState(false);
+  const [editorDraftReadyMediaId, setEditorDraftReadyMediaId] = useState("");
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [exportBusy, setExportBusy] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
@@ -148,6 +172,103 @@ function App() {
     }
   }, []);
 
+  const loadRuntimeDiagnostics = useCallback(async () => {
+    setDiagnosticsLoading(true);
+    setDiagnosticsError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/diagnostics?whisper_model=${encodeURIComponent(whisperModel)}`);
+      if (!response.ok) throw new Error("Tidak dapat membaca pemeriksaan software dari local service.");
+      setRuntimeDiagnostics(await response.json() as RuntimeDiagnostics);
+    } catch (e) {
+      setDiagnosticsError(e instanceof Error ? e.message : "Pemeriksaan software gagal.");
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  }, [whisperModel]);
+
+  useEffect(() => {
+    if (active === "Settings" || active === "AI Workspace" && aiMediaId) void loadRuntimeDiagnostics();
+  }, [active, aiMediaId, loadRuntimeDiagnostics]);
+
+  const loadGeminiSettings = useCallback(async () => {
+    setGeminiSettingsLoading(true);
+    setGeminiKeyError("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Gagal membaca status Gemini API key.");
+      setGeminiSettings(payload as GeminiSettings);
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Gagal membaca konfigurasi Gemini.");
+    } finally {
+      setGeminiSettingsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (active === "Settings") void loadGeminiSettings();
+  }, [active, loadGeminiSettings]);
+
+  const saveGeminiKey = async () => {
+    setGeminiKeyBusy(true);
+    setGeminiKeyError("");
+    setGeminiKeyMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: geminiKeyInput })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Gagal menyimpan Gemini API key.");
+      setGeminiSettings(payload as GeminiSettings);
+      setGeminiKeyInput("");
+      setGeminiKeyMessage("API key tersimpan di Windows Credential Manager.");
+      void loadRuntimeDiagnostics();
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Gagal menyimpan Gemini API key.");
+    } finally {
+      setGeminiKeyBusy(false);
+    }
+  };
+
+  const removeGeminiKey = async () => {
+    if (!window.confirm("Hapus Gemini API key dari Windows Credential Manager?")) return;
+    setGeminiKeyBusy(true);
+    setGeminiKeyError("");
+    setGeminiKeyMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-key`, { method: "DELETE" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Gagal menghapus Gemini API key.");
+      setGeminiSettings(payload as GeminiSettings);
+      setGeminiKeyInput("");
+      setGeminiKeyMessage("API key dihapus dari Windows Credential Manager.");
+      void loadRuntimeDiagnostics();
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Gagal menghapus Gemini API key.");
+    } finally {
+      setGeminiKeyBusy(false);
+    }
+  };
+
+  const testGeminiKey = async () => {
+    setGeminiKeyBusy(true);
+    setGeminiKeyError("");
+    setGeminiKeyMessage("");
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/ai/gemini-test`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "Uji koneksi Gemini gagal.");
+      if (payload.success) setGeminiKeyMessage(payload.message || "Koneksi Gemini berhasil.");
+      else setGeminiKeyError(payload.message || "Koneksi Gemini gagal.");
+    } catch (e) {
+      setGeminiKeyError(e instanceof Error ? e.message : "Uji koneksi Gemini gagal.");
+    } finally {
+      setGeminiKeyBusy(false);
+    }
+  };
+
   const loadMedia = useCallback(async (project: Project) => {
     setLoading(true); setError("");
     try {
@@ -165,11 +286,37 @@ function App() {
     if (project) void loadMedia(project);
   }, [active, aiProjectId, projects, loadMedia]);
 
+
+  async function cancelTranscription() {
+    if (!transcription) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}/cancel`, { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Gagal membatalkan transkripsi.");
+      setTranscription(previous => previous ? { ...previous, ...body } : body as Transcription);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal membatalkan transkripsi.");
+    }
+  }
+
+  async function cancelDiscovery() {
+    if (!discovery) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/discovery/${discovery.id}/cancel`, { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Gagal membatalkan AI discovery.");
+      setDiscovery(body as Discovery);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal membatalkan AI discovery.");
+    }
+  }
+
   useEffect(() => {
     if (!aiMediaId) return;
     setTranscription(null);
     setSubtitleText({});
     setSubtitleTiming({});
+    setWordTiming({});
     setBurnSubtitles(false);
     let cancelled = false;
     const restoreLatestJobs = async () => {
@@ -263,9 +410,20 @@ function App() {
     if (!aiMediaId || editEnd <= editStart) return;
     const selectedClips = clipSequence.length ? clipSequence : [{ start: editStart, end: editEnd, audio_volume: audioVolume }];
     const subtitleSource = transcription?.media_id === aiMediaId ? transcription.segments ?? [] : [];
-    const selectedSubtitles = subtitleSource.filter((segment,index) => {
+    const selectedSubtitles = subtitleSource.flatMap((segment,index) => {
       const timing = getSubtitleRange(index, segment);
-      return selectedClips.some(clip => timing.end > clip.start && timing.start < clip.end);
+      const words = segment.words?.length
+        ? segment.words.map((word,wordIndex)=>currentWordTiming(segment.id,wordIndex,word))
+        : [];
+      const correctedText = subtitleText[index];
+      if (words.length && hasCompleteWordTiming(segment) && (correctedText === undefined || correctedText === segment.text)) {
+        return words
+          .map(word=>({start:Math.max(word.start,timing.start),end:Math.min(word.end,timing.end),text:word.text}))
+          .filter(word=>word.end>word.start && selectedClips.some(clip=>word.end>clip.start&&word.start<clip.end));
+      }
+      return selectedClips.some(clip=>timing.end>clip.start&&timing.start<clip.end)
+        ? [{start:timing.start,end:timing.end,text:correctedText ?? segment.text}]
+        : [];
     });
     setExportBusy(true);
     setError("");
@@ -289,11 +447,7 @@ function App() {
           burn_subtitles: burnSubtitles,
           subtitle_preset: subtitlePreset,
           subtitle_style: { font_size: subtitleFontSize, vertical_position: subtitlePosition, outline_width: subtitleOutline, background_opacity: subtitleBackground },
-          subtitle_segments: burnSubtitles ? selectedSubtitles.map(segment => {
-            const index = subtitleSource.indexOf(segment);
-            const timing = index >= 0 ? getSubtitleRange(index, segment) : segment;
-            return { start: timing.start, end: timing.end, text: index >= 0 ? (subtitleText[index] ?? segment.text) : segment.text };
-          }) : []
+          subtitle_segments: burnSubtitles ? selectedSubtitles : []
         })
       });
       const body = await response.json();
@@ -309,11 +463,32 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${API_BASE}/api/health`, { signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then(() => { setHealth("online"); void loadProjects(); })
-      .catch(() => setHealth("offline"));
-    return () => controller.abort();
+    let timer: number | undefined;
+    let connected = false;
+
+    const checkHealth = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/health`, { signal: controller.signal });
+        if (!response.ok) throw new Error("Local service health check failed.");
+        if (!connected) void loadProjects();
+        connected = true;
+        setHealth("online");
+      } catch {
+        if (controller.signal.aborted) return;
+        connected = false;
+        setHealth("offline");
+      }
+
+      if (!controller.signal.aborted) {
+        timer = window.setTimeout(checkHealth, connected ? 5000 : 1000);
+      }
+    };
+
+    void checkHealth();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [loadProjects]);
 
   async function createProject(event: React.FormEvent) {
@@ -419,9 +594,21 @@ function App() {
         setSubtitleOutline(Math.max(0, Math.min(8, parsed.subtitleOutline ?? 2)));
         setSubtitleBackground(Math.max(0, Math.min(90, parsed.subtitleBackground ?? 0)));
         setSplitPoints(parsed.splits ?? []);
+        const sourceDuration = Math.max(0, media.find(item => item.id === aiMediaId)?.duration ?? 0);
         const restoredSequence = Array.isArray(parsed.sequence)
-          ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start)
-            .map(item => ({ ...item, audio_volume: Number.isFinite(item.audio_volume) ? Math.max(0, Math.min(2, item.audio_volume!)) : 1 }))
+          ? parsed.sequence.filter(item => item && Number.isFinite(item.start) && Number.isFinite(item.end)
+              && item.start >= 0 && item.end > item.start && (sourceDuration <= 0 || item.start < sourceDuration))
+            .map(item => ({
+              ...item,
+              start: Math.max(0, item.start),
+              end: sourceDuration > 0 ? Math.min(item.end, sourceDuration) : item.end,
+              crop_zoom: Number.isFinite(item.crop_zoom) ? Math.max(1, Math.min(3, item.crop_zoom!)) : 1,
+              crop_x: Number.isFinite(item.crop_x) ? Math.max(0, Math.min(1, item.crop_x!)) : 0.5,
+              crop_y: Number.isFinite(item.crop_y) ? Math.max(0, Math.min(1, item.crop_y!)) : 0.5,
+              audio_volume: Number.isFinite(item.audio_volume) ? Math.max(0, Math.min(2, item.audio_volume!)) : 1
+            }))
+            .filter(item => item.end - item.start >= 0.5)
+            .slice(0, 100)
           : [];
         setClipSequence(restoredSequence);
         const restoredIndex = Number.isInteger(parsed.selectedSequenceIndex) && parsed.selectedSequenceIndex! >= 0 && parsed.selectedSequenceIndex! < restoredSequence.length ? parsed.selectedSequenceIndex! : null;
@@ -458,7 +645,32 @@ function App() {
     }
     setEditorCandidateId("");
     setEditorSaved(false);
+    setEditorDraftReadyMediaId(aiMediaId);
   }, [aiMediaId, media]);
+
+  useEffect(() => {
+    if (!aiMediaId || editorDraftReadyMediaId !== aiMediaId || editEnd <= editStart) return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem("pcs-editor-" + aiMediaId, JSON.stringify({
+          start: editStart, end: editEnd, ratio: aspectRatio, outputPreset, qualityProfile,
+          frameRate, normalizeAudio, texts: subtitleText, subtitleTiming, preset: subtitlePreset,
+          splits: splitPoints, sequence: clipSequence, selectedSequenceIndex, cropZoom, cropX,
+          cropY, audioVolume, subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
+        }));
+        setEditorSaved(true);
+        window.setTimeout(() => setEditorSaved(false), 1800);
+      } catch {
+        setError("Draft editor tidak dapat disimpan ke penyimpanan lokal browser.");
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    aiMediaId, editorDraftReadyMediaId, editStart, editEnd, aspectRatio, outputPreset,
+    qualityProfile, frameRate, normalizeAudio, subtitleText, subtitleTiming, subtitlePreset,
+    splitPoints, clipSequence, selectedSequenceIndex, cropZoom, cropX, cropY, audioVolume,
+    subtitleFontSize, subtitlePosition, subtitleOutline, subtitleBackground
+  ]);
 
   useEffect(() => {
     if (editEnd > 0 || !transcription?.segments?.length) return;
@@ -510,12 +722,14 @@ function App() {
   }
 
   function addSplitRangesToSequence() {
+    const availableSlots = 100 - clipSequence.length;
     const points = splitPoints.filter(point => point > editStart && point < editEnd).sort((a,b)=>a-b);
-    if (!points.length) return;
+    if (!points.length || availableSlots <= 0) return;
     const boundaries = [editStart, ...points, editEnd];
     const ranges = boundaries.slice(0, -1).map((start, index) => ({
       start, end: boundaries[index + 1], crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: audioVolume
-    }));
+    })).slice(0, availableSlots);
+    if (!ranges.length) return;
     const nextIndex = clipSequence.length;
     setClipSequence(previous => [...previous, ...ranges].slice(0, 100));
     setSelectedSequenceIndex(nextIndex);
@@ -587,6 +801,124 @@ function App() {
     } else if (editEnd > editStart) {
       setClipSequence([{ start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY, audio_volume: next }]);
       setSelectedSequenceIndex(0);
+    }
+  }
+
+  function wordKey(segmentId:number|null, wordIndex:number) { return `${segmentId ?? "legacy"}:${wordIndex}`; }
+  function currentWordTiming(segmentId:number|null, wordIndex:number, word:TranscriptWord) {
+    return wordTiming[wordKey(segmentId,wordIndex)] ?? {start:word.start,end:word.end,text:word.text};
+  }
+  function hasCompleteWordTiming(segment:TranscriptSegment) {
+    if (!segment.words?.length) return false;
+    const tokens = (value:string) => value.normalize("NFKC")
+      .match(/[\p{L}\p{M}\p{N}_]+|[^\p{L}\p{M}\p{N}\s]/gu)
+      ?.map(token => token.toLocaleLowerCase("id")) ?? [];
+    const expected = tokens(segment.text);
+    const actual = tokens(segment.words.map(word => word.text.trim()).join(" "));
+    return expected.length > 0 && expected.length === actual.length
+      && expected.every((token,index)=>token === actual[index]);
+  }
+  async function saveWordTiming(segment:TranscriptSegment, wordIndex:number, next:{start:number;end:number;text:string}) {
+    if (!segment.id || !transcription || wordSaveLockRef.current) return;
+    wordSaveLockRef.current = true;
+    const requestTranscriptionId = transcription.id;
+    const key=wordKey(segment.id,wordIndex);
+    setWordBusy(key);
+    try {
+      const response=await fetch(`${API_BASE}/api/transcriptions/${requestTranscriptionId}/segments/${segment.id}/words/${wordIndex}`,{
+        method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)
+      });
+      const result=await response.json();
+      if(!response.ok) throw new Error(result.detail ?? "Gagal menyimpan timing kata.");
+      setTranscription(previous => previous?.id === requestTranscriptionId ? result as Transcription : previous);
+      setWordTiming(previous=>{const copy={...previous};delete copy[key];return copy;});
+    } catch(error) {
+      // Keep the edited value so the user can retry after a transient API error.
+      setWordTiming(previous=>({...previous,[key]:next}));
+      setError(error instanceof Error ? error.message : "Gagal menyimpan timing kata.");
+    } finally {
+      wordSaveLockRef.current = false;
+      setWordBusy("");
+    }
+  }
+  function getWordDragRange(drag: NonNullable<typeof wordTimingDragRef.current>, clientX: number) {
+    const delta = (clientX - drag.startX) * drag.secondsPerPixel;
+    const duration = drag.initialEnd - drag.initialStart;
+    let start = drag.initialStart;
+    let end = drag.initialEnd;
+    if (drag.mode === "move") {
+      start = Math.max(drag.minStart, Math.min(drag.maxEnd - duration, drag.initialStart + delta));
+      end = start + duration;
+    } else if (drag.mode === "start") {
+      start = Math.max(drag.minStart, Math.min(drag.initialEnd - 0.01, drag.initialStart + delta));
+    } else {
+      end = Math.min(drag.maxEnd, Math.max(drag.initialStart + 0.01, drag.initialEnd + delta));
+    }
+    return { start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) };
+  }
+
+  function beginWordTiming(
+    event: React.PointerEvent<HTMLElement>,
+    segment: TranscriptSegment,
+    wordIndex: number,
+    mode: "move" | "start" | "end",
+  ) {
+    if (wordBusy || wordSaveLockRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const lane = event.currentTarget.closest(".word-timing-lane") as HTMLDivElement | null;
+    const captureTarget = event.currentTarget.closest(".timeline-word-clip") as HTMLElement | null;
+    const word = segment.words?.[wordIndex];
+    if (!lane || !captureTarget || !word) return;
+    const timing = currentWordTiming(segment.id, wordIndex, word);
+    const previousWord = wordIndex > 0 ? segment.words[wordIndex - 1] : undefined;
+    const nextWord = wordIndex < segment.words.length - 1 ? segment.words[wordIndex + 1] : undefined;
+    const previousTiming = previousWord ? currentWordTiming(segment.id, wordIndex - 1, previousWord) : undefined;
+    const nextTiming = nextWord ? currentWordTiming(segment.id, wordIndex + 1, nextWord) : undefined;
+    captureTarget.setPointerCapture(event.pointerId);
+    wordTimingDragRef.current = {
+      segment, wordIndex, mode, startX: event.clientX,
+      initialStart: timing.start, initialEnd: timing.end,
+      secondsPerPixel: timelineTotalDuration / Math.max(1, lane.getBoundingClientRect().width),
+      minStart: previousTiming?.end ?? segment.start,
+      maxEnd: nextTiming?.start ?? segment.end,
+    };
+  }
+
+  function moveWordTiming(event: React.PointerEvent<HTMLElement>) {
+    const drag = wordTimingDragRef.current;
+    if (!drag) return;
+    const range = getWordDragRange(drag, event.clientX);
+    const key = wordKey(drag.segment.id, drag.wordIndex);
+    const current = currentWordTiming(drag.segment.id, drag.wordIndex, drag.segment.words[drag.wordIndex]);
+    setWordTiming(previous => ({ ...previous, [key]: { ...current, ...range } }));
+  }
+
+  function finishWordTiming(event: React.PointerEvent<HTMLElement>) {
+    const drag = wordTimingDragRef.current;
+    if (!drag) return;
+    const range = getWordDragRange(drag, event.clientX);
+    const word = drag.segment.words[drag.wordIndex];
+    const current = currentWordTiming(drag.segment.id, drag.wordIndex, word);
+    const next = { ...current, ...range };
+    const key = wordKey(drag.segment.id, drag.wordIndex);
+    wordTimingDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setWordTiming(previous => ({ ...previous, [key]: next }));
+    void saveWordTiming(drag.segment, drag.wordIndex, next);
+  }
+
+  function cancelWordTiming(event: React.PointerEvent<HTMLElement>) {
+    const drag = wordTimingDragRef.current;
+    if (drag) {
+      const key = wordKey(drag.segment.id, drag.wordIndex);
+      setWordTiming(previous => { const copy = { ...previous }; delete copy[key]; return copy; });
+    }
+    wordTimingDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }
 
@@ -798,9 +1130,10 @@ function App() {
                   <div className="ai-control-grid">
                     <label>Whisper model<select value={whisperModel} onChange={e=>setWhisperModel(e.target.value)}><option value="tiny">Tiny · paling cepat</option><option value="base">Base · ringan</option><option value="small">Small · balanced</option><option value="medium">Medium · lebih akurat</option><option value="large-v3">Large v3 · paling berat</option><option value="distil-large-v3">Distil Large v3</option></select></label>
                     <label>Bahasa audio<select value={whisperLanguage} onChange={e=>setWhisperLanguage(e.target.value)}><option value="id">Indonesia</option><option value="en">English</option><option value="">Auto detect</option></select></label>
-                    <button className="primary-button ai-action" onClick={()=>void startTranscription()} disabled={aiBusy || !!transcription && ["queued","processing"].includes(transcription.status)}><AudioLines size={15}/>{transcription?.status==="processing" || transcription?.status==="queued" ? "Transcribing..." : "Start transcription"}</button>
+                    <button className="primary-button ai-action" onClick={()=>void startTranscription()} disabled={aiBusy || !!transcription && ["queued","processing"].includes(transcription.status)}><AudioLines size={15}/>{transcription?.status==="processing" || transcription?.status==="queued" ? "Transcribing..." : ["failed","cancelled"].includes(transcription?.status ?? "") ? "Retry transcription" : "Start transcription"}</button>
                   </div>
-                  {transcription && <div className="job-status"><div className="job-status-top"><strong>{transcription.status==="completed" ? "Transcription completed" : transcription.status==="failed" ? "Transcription failed" : "Transcription in progress"}</strong><span>{Math.round((transcription.progress ?? 0)*100)}%</span></div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,(transcription.progress ?? 0)*100))}%`}}/></div>{transcription.status==="completed" && <small>{transcription.detected_language?.toUpperCase() ?? "Language detected"} · {transcription.segments?.length ?? 0} transcript segments</small>}{transcription.status==="failed" && <small className="job-error">{transcription.error ?? "Proses transkripsi gagal."}</small>}</div>}
+                  {runtimeDiagnostics?.transcription.model_preflight.model === whisperModel && <div className="whisper-preflight-note"><strong>{runtimeDiagnostics.transcription.model_preflight.downloaded ? "Model sudah tersedia di cache lokal." : runtimeDiagnostics.transcription.model_preflight.disk_space_known ? (runtimeDiagnostics.transcription.model_preflight.disk_space_ok ? "Ruang disk cukup untuk mengunduh model." : "Ruang disk tidak mencukupi untuk model ini.") : "Ruang disk belum dapat diperiksa."}</strong><span>{runtimeDiagnostics.transcription.model_preflight.downloaded ? "Tidak perlu mengunduh ulang model." : "Estimasi unduhan: " + (runtimeDiagnostics.transcription.model_preflight.estimated_download_bytes / 1024**2).toFixed(0) + " MB · ruang kosong: " + (runtimeDiagnostics.transcription.model_preflight.free_bytes === null ? "tidak diketahui" : (runtimeDiagnostics.transcription.model_preflight.free_bytes / 1024**3).toFixed(2) + " GB")}</span></div>}
+                  {transcription && <div className="job-status"><div className="job-status-top"><strong>{transcription.status==="completed" ? "Transcription completed" : transcription.status==="failed" ? "Transcription failed" : transcription.status==="cancelled" ? "Transcription cancelled" : "Transcription in progress"}</strong><span>{Math.round((transcription.progress ?? 0)*100)}%</span>{["queued","processing"].includes(transcription.status) && <button className="subtle-button" onClick={()=>void cancelTranscription()}><X size={13}/> Cancel</button>}</div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,(transcription.progress ?? 0)*100))}%`}}/></div>{transcription.status==="completed" && <small>{transcription.detected_language?.toUpperCase() ?? "Language detected"} · {transcription.segments?.length ?? 0} transcript segments</small>}{["failed","cancelled"].includes(transcription.status) && <small className="job-error">{transcription.error ?? "Proses transkripsi gagal."}</small>}</div>}
                 </div>
                 {transcription?.status==="completed" && <div className="ai-panel">
                   <div className="ai-panel-heading"><div><span className="ai-step">02</span><div><h3>AI Clip Discovery</h3><p>Analisis transkrip dan temukan momen yang layak dipotong.</p></div></div><span className="ai-local-tag">TRANSCRIPT ONLY</span></div>
@@ -809,10 +1142,10 @@ function App() {
                     {discoveryMode==="category" && <label>Category<select value={discoveryCategory} onChange={e=>setDiscoveryCategory(e.target.value)}><option value="podcast">Podcast</option><option value="gaming">Gaming</option><option value="education">Education</option><option value="motivation">Motivation</option><option value="comedy">Comedy</option><option value="news">News</option><option value="storytelling">Storytelling</option><option value="custom">Custom</option></select></label>}
                     <label>Minimum duration<select value={minDuration} onChange={e=>setMinDuration(Number(e.target.value))}><option value={15}>15 seconds</option><option value={30}>30 seconds</option><option value={45}>45 seconds</option><option value={60}>60 seconds</option><option value={90}>90 seconds</option></select></label>
                     <label>Maximum duration<select value={maxDuration} onChange={e=>setMaxDuration(Number(e.target.value))}><option value={30}>30 seconds</option><option value={60}>60 seconds</option><option value={90}>90 seconds</option><option value={120}>120 seconds</option><option value={180}>180 seconds</option></select></label>
-                    <button className="primary-button ai-action" onClick={()=>void startDiscovery()} disabled={aiBusy || minDuration>maxDuration || !!discovery && ["queued","processing"].includes(discovery.status)}><Sparkles size={15}/>{discovery?.status==="processing" || discovery?.status==="queued" ? "Analyzing..." : "Find clip moments"}</button>
+                    <button className="primary-button ai-action" onClick={()=>void startDiscovery()} disabled={aiBusy || minDuration>maxDuration || !!discovery && ["queued","processing"].includes(discovery.status)}><Sparkles size={15}/>{discovery?.status==="processing" || discovery?.status==="queued" ? "Analyzing..." : ["failed","cancelled"].includes(discovery?.status ?? "") ? "Retry analysis" : "Find clip moments"}</button>
                   </div>
                   {minDuration>maxDuration && <small className="job-error">Durasi minimum tidak boleh melebihi durasi maksimum.</small>}
-                  {discovery && <div className="job-status"><div className="job-status-top"><strong>{discovery.status==="completed" ? "Analysis completed" : discovery.status==="failed" ? "Analysis failed" : "Analyzing transcript"}</strong><span>{Math.round(discovery.progress*100)}%</span></div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,discovery.progress*100))}%`}}/></div>{discovery.status==="failed" && <small className="job-error">{discovery.error ?? "Analisis AI gagal."}</small>}</div>}
+                  {discovery && <div className="job-status"><div className="job-status-top"><strong>{discovery.status==="completed" ? "Analysis completed" : discovery.status==="failed" ? "Analysis failed" : discovery.status==="cancelled" ? "Analysis cancelled" : "Analyzing transcript"}</strong><span>{Math.round(discovery.progress*100)}%</span>{["queued","processing"].includes(discovery.status) && <button className="subtle-button" onClick={()=>void cancelDiscovery()}><X size={13}/> Cancel</button>}</div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,discovery.progress*100))}%`}}/></div>{["failed","cancelled"].includes(discovery.status) && <small className="job-error">{discovery.error ?? "Analisis AI gagal."}</small>}</div>}
                   {discovery?.status==="completed" && <div className="candidate-section"><div className="media-heading"><div><h3>Clip candidates</h3><p>{discovery.candidates.length} kandidat ditemukan · urut berdasarkan skor</p></div></div>{discovery.candidates.length ? <div className="candidate-list">{discovery.candidates.map(candidate=><article className="candidate-card" key={candidate.id}><div className="candidate-top"><span>{formatTimestamp(candidate.start_seconds)} — {formatTimestamp(candidate.end_seconds)}</span><strong>{candidate.score}<small>/100</small></strong></div><h4>{candidate.title}</h4><p className="candidate-hook">{candidate.hook}</p><p>{candidate.summary}</p><small>{candidate.rationale}</small><div className="candidate-boundary-quality"><span>Boundary quality</span><strong>{candidate.boundary_quality ?? 50}/100</strong></div><div className="candidate-boundary-notes"><span><b>OPEN</b> {candidate.opening_boundary ?? "Batas segmen transkrip"}</span><span><b>CLOSE</b> {candidate.ending_boundary ?? "Batas segmen transkrip"}</span></div><small className="candidate-context-note">{candidate.context_note ?? "Batas klip diselaraskan dengan segmen transkrip."}</small><div className="candidate-meta"><span>{candidate.category}</span><span>{Math.round(candidate.end_seconds-candidate.start_seconds)} sec</span></div></article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada kandidat yang memenuhi kriteria</strong><p>Coba mode analisis lain atau rentang durasi berbeda.</p></div>}</div>}
                 </div>}
                 <p className="ai-provider-note">Provider AI dikonfigurasi di backend. Gemini mengirim teks transkrip saja dengan penyimpanan interaksi dinonaktifkan; Ollama dapat berjalan sepenuhnya lokal.</p>
@@ -929,8 +1262,51 @@ function App() {
                           {timelineClips.length>0&&timelineTranscriptSegments.length===0&&<span className="timeline-empty-hint">Transcribe video to populate caption track</span>}
                         </div>
                       </div>
+                      <div className="multitrack-row">
+                        <div className="multitrack-label"><b>WORDS</b><small>Word timing · drag to adjust</small></div>
+                        <div className="multitrack-lane word-timing-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
+                          {timelineClips.flatMap((clip,clipIndex)=>{
+                            const offset=timelineClips.slice(0,clipIndex).reduce((sum,item)=>sum+item.end-item.start,0);
+                            return timelineTranscriptSegments.flatMap((segment,segmentIndex)=>(segment.words ?? []).flatMap((word,wordIndex)=>{
+                              const timing=currentWordTiming(segment.id,wordIndex,word);
+                              if(timing.end<=clip.start || timing.start>=clip.end) return [];
+                              const start=Math.max(timing.start,clip.start);
+                              const end=Math.min(timing.end,clip.end);
+
+                              const dragProps={
+                                onPointerMove:moveWordTiming,
+                                onPointerUp:finishWordTiming,
+                                onPointerCancel:cancelWordTiming,
+                              };
+                              const isActive=playheadSeconds>=timing.start && playheadSeconds<=timing.end;
+                              return [<button
+                                type="button"
+                                key={"word-"+clipIndex+"-"+segmentIndex+"-"+wordIndex}
+                                className={"timeline-word-clip"+(isActive?" active":"")}
+                                style={{
+                                  left:((offset+start-clip.start)/timelineTotalDuration*100)+"%",
+                                  width:((end-start)/timelineTotalDuration*100)+"%"
+                                }}
+                                title={word.text+" · "+formatTimestamp(timing.start)+"–"+formatTimestamp(timing.end)}
+                                aria-label={"Word "+word.text+", "+formatTimestamp(timing.start)+" to "+formatTimestamp(timing.end)}
+                                onPointerDown={event=>beginWordTiming(event,segment,wordIndex,"move")}
+                                {...dragProps}
+                                onClick={event=>{
+                                  event.stopPropagation();
+                                  if(clipSequence.length) selectSequenceClip(clip,clipIndex,false);
+                                  seekPreview(timing.start);
+                                }}>
+                                <span className="word-trim-handle left" title="Trim word start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginWordTiming(event,segment,wordIndex,"start")}/>
+                                <span className="word-clip-text">{timing.text}</span>
+                                <span className="word-trim-handle right" title="Trim word end" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginWordTiming(event,segment,wordIndex,"end")}/>
+                              </button>];
+                            }));
+                          })}
+                          {timelineClips.length>0&&!timelineTranscriptSegments.some(segment=>segment.words?.length)&&<span className="timeline-empty-hint">Word timestamps unavailable · segment caption fallback is active</span>}
+                        </div>
+                      </div>
                       <div className="multitrack-footer">
-                        <span>Drag clip blocks to reorder · drag trim handles to adjust in/out points</span>
+                        <span>Drag clips to reorder · trim captions or individual words for precise timing</span>
                         <button className="secondary-button" onClick={splitSelectedTimelineClip} disabled={!timelineClips.length || playheadSeconds<=((timelineSelectedIndex===null?editStart:timelineClips[timelineSelectedIndex].start)+0.1) || playheadSeconds>=((timelineSelectedIndex===null?editEnd:timelineClips[timelineSelectedIndex].end)-0.1)}>Split selected at playhead</button>
                       </div>
                     </section>
@@ -980,10 +1356,10 @@ function App() {
                   </div>
                   <div className="editor-info"><span>Selected duration</span><strong>{formatDuration(editorDuration)}</strong></div>
                   <div className="editor-info"><span>Subtitle segments</span><strong>{visibleSubtitleSegments.length}</strong></div>
-                  <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save editing draft</button>
+                  <button className="primary-button editor-save" onClick={saveEditorDraft} disabled={editEnd<=editStart}>Save now</button>
                   <button className="secondary-button editor-save" onClick={()=>void startExport()} disabled={exportBusy || editEnd<=editStart}>{exportBusy ? "Starting export..." : clipSequence.length ? `Render ${clipSequence.length} clips` : "Render this clip"} <ArrowDownToLine size={14}/></button>
                   {editorSaved && <small className="save-confirmation">Draft tersimpan di perangkat ini.</small>}
-                  <p className="editor-disclaimer">Pengaturan edit tersimpan lokal. Rendering dan crop/reposition masuk ke Phase 5.</p>
+                  <p className="editor-disclaimer">Perubahan tersimpan otomatis di perangkat ini. Gunakan Save now untuk menyimpan langsung.</p>
                 </aside>
               </div>}
             </section>
@@ -1000,7 +1376,7 @@ function App() {
                   <label><span>Opasitas background <output>{subtitleBackground}%</output></span><input type="range" min="0" max="90" step="5" value={subtitleBackground} onChange={e=>setSubtitleBackground(Number(e.target.value))}/></label>
                 </div>
                 <div className={"subtitle-sample " + subtitlePreset} style={{alignItems:"end",paddingBottom:String(subtitlePosition)+"%"}}><span style={{fontSize:String(Math.max(12,Math.round(subtitleFontSize*0.36)))+"px",WebkitTextStroke:String(Math.min(2,subtitleOutline*0.25))+"px #000",backgroundColor:subtitleBackground?"rgba(0,0,0,"+(subtitleBackground/100)+")":(subtitlePreset==="highlight"?undefined:"transparent"),padding:subtitleBackground?"5px 9px":undefined}}>{visibleSubtitleSegments.length ? (subtitleText[transcription.segments.indexOf(visibleSubtitleSegments[0])] ?? visibleSubtitleSegments[0].text) : "Preview subtitle"}</span></div>
-                <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=timelineTranscriptSegments.indexOf(segment);const timing=getSubtitleRange(index,segment);return <div className="subtitle-row" key={index}><div className="subtitle-timing-fields"><button className="subtitle-time" onClick={()=>seekPreview(timing.start)}>{formatTimestamp(timing.start)}</button><label><span>IN</span><input type="number" min="0" max={timing.end-0.05} step="0.05" value={Number(timing.start.toFixed(2))} onChange={event=>updateSubtitleRange(index,"start",Number(event.target.value))}/></label><label><span>OUT</span><input type="number" min={timing.start+0.05} max={editorSourceDuration || undefined} step="0.05" value={Number(timing.end.toFixed(2))} onChange={event=>updateSubtitleRange(index,"end",Number(event.target.value))}/></label></div><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(timing.start)}/></div>})}</div>
+                <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=timelineTranscriptSegments.indexOf(segment);const timing=getSubtitleRange(index,segment);return <div className="subtitle-row" key={index}><div className="subtitle-timing-fields"><button className="subtitle-time" onClick={()=>seekPreview(timing.start)}>{formatTimestamp(timing.start)}</button><label><span>IN</span><input type="number" min="0" max={timing.end-0.05} step="0.05" value={Number(timing.start.toFixed(2))} onChange={event=>updateSubtitleRange(index,"start",Number(event.target.value))}/></label><label><span>OUT</span><input type="number" min={timing.start+0.05} max={editorSourceDuration || undefined} step="0.05" value={Number(timing.end.toFixed(2))} onChange={event=>updateSubtitleRange(index,"end",Number(event.target.value))}/></label></div><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(timing.start)}/>{segment.words?.length ? <div className="word-edit-list"><strong>{hasCompleteWordTiming(segment) ? "Word timing" : "Word timing · partial (export falls back to segment)"}</strong>{segment.words.map((word,wordIndex)=>{const edited=currentWordTiming(segment.id,wordIndex,word);const key=wordKey(segment.id,wordIndex);return <div className="word-edit-row" key={wordIndex}><span>{wordIndex+1}. {edited.text}</span><label>IN<input type="number" step="0.01" min={segment.start} max={edited.end-0.01} value={Number(edited.start.toFixed(2))} disabled={Boolean(wordBusy)} onChange={event=>setWordTiming(previous=>({...previous,[key]:{...edited,start:Number(event.target.value)}}))}/></label><label>OUT<input type="number" step="0.01" min={edited.start+0.01} max={segment.end} value={Number(edited.end.toFixed(2))} disabled={Boolean(wordBusy)} onChange={event=>setWordTiming(previous=>({...previous,[key]:{...edited,end:Number(event.target.value)}}))}/></label><button className="secondary-button" disabled={!segment.id || Boolean(wordBusy)} onClick={()=>void saveWordTiming(segment,wordIndex,edited)}>{wordBusy===key?"Saving…":"Save"}</button></div>})}</div> : <small className="muted-label">Word timestamps unavailable · segment timing fallback</small>}</div>})}</div>
                 <p className="editor-disclaimer">Subtitle yang dikoreksi dan preset akan ikut dirender saat opsi burn-in diaktifkan. Tanpa opsi tersebut, video diekspor tanpa subtitle tertanam.</p>
               </div>}
             </section>
@@ -1014,6 +1390,40 @@ function App() {
               </div>
               <div className="export-list-heading"><div><h3>Export history</h3><p>100 pekerjaan terbaru dari perangkat ini</p></div><span>{exportJobs.length} jobs</span></div>
               {exportJobs.length ? <div className="export-job-list">{exportJobs.map(job=><article className="export-job-card" key={job.id}><div className="export-job-main"><div><strong>{job.output_name}</strong><small>{job.clip_count > 1 ? job.clip_count + " clips in sequence" : formatTimestamp(job.start_seconds) + " – " + formatTimestamp(job.end_seconds)} · {job.output_preset ?? job.aspect_ratio} · {job.quality_profile ?? "balanced"} · {job.frame_rate ? job.frame_rate+" FPS" : "Source FPS"} · {job.normalize_audio ? "Normalized audio" : "Original loudness"} · {job.encoder ?? "Encoder pending"}</small></div><span className={"export-status "+job.status}>{job.status}</span></div><div className="progress-track"><i style={{width:Math.max(0,Math.min(100,job.progress*100))+"%"}}/></div>{job.error && <small className="job-error">{job.error}</small>}{job.status==="completed" && job.download_url && <a className="export-download" href={API_BASE+job.download_url}>Download MP4 <ArrowDownToLine size={13}/></a>}{["queued","processing"].includes(job.status) && <button className="secondary-button export-cancel" onClick={async()=>{try{const response=await fetch(`${API_BASE}/api/exports/${job.id}/cancel`,{method:"POST"});const body=await response.json();if(!response.ok)throw new Error(body.detail??"Gagal membatalkan export.");setExportJobs(previous=>previous.map(item=>item.id===job.id?body as ExportJob:item));}catch(e){setError(e instanceof Error?e.message:"Gagal membatalkan export.");}}}>Cancel export</button>}</article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada hasil export</strong><p>Atur rentang klip di Clip Editor lalu mulai rendering.</p><button className="subtle-button" onClick={()=>setActive("Clip Editor")}>Buka Clip Editor <ArrowRight size={14}/></button></div>}
+            </section>
+          ) : active === "Settings" ? (
+            <section className="runtime-settings">
+              <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> SYSTEM READINESS</div><h1>System check.</h1><p className="welcome-copy">Periksa komponen yang dibutuhkan sebelum mulai clipping. Software yang belum tersedia akan disertai tautan unduhan resmi.</p></div><button className="secondary-button" onClick={()=>void loadRuntimeDiagnostics()} disabled={diagnosticsLoading}><RefreshCw size={14}/>{diagnosticsLoading ? "Memeriksa..." : "Check again"}</button></div>
+              {diagnosticsError && <div className="error-banner">{diagnosticsError}<button className="text-button" onClick={()=>void loadRuntimeDiagnostics()}>Retry</button></div>}
+              {!runtimeDiagnostics && diagnosticsLoading ? <div className="loading-state">Memeriksa software dan runtime lokal...</div> : null}
+              {runtimeDiagnostics && <>
+                <div className="runtime-summary"><div><span className="muted-label">PLATFORM</span><strong>{runtimeDiagnostics.platform === "nt" ? "Windows" : runtimeDiagnostics.platform}</strong></div><div><span className="muted-label">REQUIRED COMPONENTS</span><strong>{runtimeDiagnostics.dependencies.filter(item=>item.required && item.available).length}/{runtimeDiagnostics.dependencies.filter(item=>item.required).length} ready</strong></div><div><span className="muted-label">AI PROVIDER</span><strong>{runtimeDiagnostics.ai.provider} · {runtimeDiagnostics.ai.configured ? "configured" : "needs setup"}</strong></div></div>
+                <div className="runtime-section-heading"><div><h3>Software & runtime</h3><p>Komponen wajib dan opsional yang terdeteksi oleh aplikasi.</p></div><span>{runtimeDiagnostics.dependencies.filter(item=>item.required && !item.available).length ? "Action required" : "Required checks passed"}</span></div>
+                <div className="runtime-dependency-list">{runtimeDiagnostics.dependencies.map(item=><article className="runtime-dependency-card" key={item.id}><div className="runtime-dependency-top"><div><span className="runtime-dependency-kind">{item.required ? "REQUIRED" : "OPTIONAL"}</span><h4>{item.name}</h4></div><span className={"runtime-status "+(item.available ? "ready" : item.required ? "missing" : "optional")}>{item.available ? "Available" : item.required ? "Not detected" : "Optional · not installed"}</span></div><p>{item.description}</p>{item.id === "ffmpeg" && <small className="runtime-version-info">FFmpeg: {runtimeDiagnostics.ffmpeg.available ? runtimeDiagnostics.ffmpeg.version ?? "Detected" : "Missing"} · FFprobe: {runtimeDiagnostics.ffprobe.available ? runtimeDiagnostics.ffprobe.version ?? "Detected" : "Missing"}</small>}{!item.available && <div className="runtime-install-note">{item.install_note}</div>}{!item.available && item.download_url && <a className="runtime-download-link" href={item.download_url} target="_blank" rel="noreferrer">{item.download_label ?? "Open download page"} <ArrowRight size={14}/></a>}</article>)}</div>
+                <div className="runtime-section-heading"><div><h3>AI & transcription</h3><p>Konfigurasi provider dan mesin transkripsi.</p></div></div>
+                <div className="runtime-detail-grid"><article className="runtime-detail-card"><span className="muted-label">WHISPER ENGINE</span><strong>{runtimeDiagnostics.transcription.installed ? "Installed" : "Unavailable"}</strong><p>Device: {runtimeDiagnostics.transcription.device} · Compute: {runtimeDiagnostics.transcription.compute_type}</p><p>Model pilihan: {runtimeDiagnostics.transcription.model_preflight.model} · {runtimeDiagnostics.transcription.model_preflight.downloaded ? "Sudah ada di cache" : "Belum diunduh"}</p><small>{runtimeDiagnostics.transcription.model_preflight.downloaded ? "Model siap digunakan tanpa unduhan tambahan." : "Estimasi unduhan: " + (runtimeDiagnostics.transcription.model_preflight.estimated_download_bytes / 1024**2).toFixed(0) + " MB. " + (runtimeDiagnostics.transcription.model_preflight.disk_space_known ? "Ruang kosong: " + (runtimeDiagnostics.transcription.model_preflight.free_bytes! / 1024**3).toFixed(2) + " GB · " + (runtimeDiagnostics.transcription.model_preflight.disk_space_ok ? "cukup termasuk cadangan 512 MB." : "tidak cukup, pilih model lebih kecil atau kosongkan disk.") : "Ruang disk tidak dapat dibaca; sistem tidak akan memblokir proses hanya berdasarkan nilai yang tidak diketahui.")}</small></article><article className="runtime-detail-card"><span className="muted-label">AI PROVIDER</span><strong>{runtimeDiagnostics.ai.provider} · {runtimeDiagnostics.ai.configured ? "Configured" : "Needs configuration"}</strong><p>Model: {runtimeDiagnostics.ai.model ?? "Default / not set"}</p><small>{runtimeDiagnostics.ai.provider === "ollama" ? (runtimeDiagnostics.ai.ollama_connection === "connected" ? (runtimeDiagnostics.ai.ollama_model_available ? "Ollama server terhubung dan model pilihan tersedia." : "Ollama server terhubung, tetapi model pilihan belum diunduh.") : runtimeDiagnostics.ai.ollama_connection === "not_tested_unsafe_endpoint" ? "Endpoint Ollama bukan alamat loopback lokal yang diizinkan; koneksi tidak diuji." : "Ollama belum terjangkau. Pastikan aplikasi Ollama berjalan, lalu tekan Check again.") : "Status Gemini hanya memeriksa keberadaan API key tanpa menampilkan nilainya."}</small></article></div>
+                <p className="runtime-footnote">Catatan: pemeriksaan ini membaca kondisi lokal, bukan menginstal software secara otomatis. Setelah memasang FFmpeg, pastikan folder bin masuk ke PATH lalu restart aplikasi dan tekan Check again. Python runtime sudah dibundel pada installer Windows.</p>
+              </>}
+                              <div className="runtime-section-heading"><div><h3>Gemini API configuration</h3><p>API key disimpan secara lokal menggunakan Windows Credential Manager.</p></div></div>
+                              <article className="gemini-settings-card">
+                                <div className="gemini-settings-status">
+                                  <span className="muted-label">CREDENTIAL STATUS</span>
+                                  <strong>{geminiSettingsLoading ? "Memeriksa..." : !geminiSettings ? "Status tidak tersedia" : geminiSettings.configured ? (geminiSettings.source === "environment" ? "Dikelola environment" : "Tersimpan aman") : "Belum dikonfigurasi"}</strong>
+                                  <small>{geminiSettings?.source === "environment" ? "Environment variable PCS_GEMINI_API_KEY aktif dan memiliki prioritas. Kelola key dari environment, bukan dari aplikasi." : geminiSettings?.credential_store_available ? (geminiSettings.configured ? "Key tersimpan di Windows Credential Manager untuk akun Windows saat ini. Nilai key tidak pernah dikirim kembali ke UI." : "Windows Credential Manager tersedia. Masukkan key untuk menyimpannya secara aman di akun Windows saat ini.") : "Windows Credential Manager tidak tersedia. Pengelolaan key melalui aplikasi hanya didukung pada Windows."}</small>
+                                </div>
+                                <form className="gemini-key-form" onSubmit={(event)=>{event.preventDefault();void saveGeminiKey();}}>
+                                  <label htmlFor="gemini-api-key">Gemini API key</label>
+                                  <input id="gemini-api-key" type="password" value={geminiKeyInput} onChange={event=>setGeminiKeyInput(event.target.value)} autoComplete="new-password" spellCheck={false} placeholder={geminiSettings?.configured ? "Masukkan key baru untuk mengganti" : "Paste Gemini API key"} disabled={geminiKeyBusy || !geminiSettings?.credential_store_available || geminiSettings.managed_by_environment} />
+                                  <div className="gemini-key-actions">
+                                    <button className="primary-button" type="submit" disabled={geminiKeyBusy || !geminiKeyInput.trim() || !geminiSettings?.credential_store_available || geminiSettings.managed_by_environment}>{geminiKeyBusy ? "Memproses..." : geminiSettings?.configured ? "Ganti API key" : "Simpan API key"}</button>
+                                    <button className="secondary-button" type="button" onClick={()=>void testGeminiKey()} disabled={geminiKeyBusy || !geminiSettings?.configured}>Test connection</button>
+                                    {geminiSettings?.configured && !geminiSettings.managed_by_environment && <button className="text-button" type="button" onClick={()=>void removeGeminiKey()} disabled={geminiKeyBusy}>Hapus key</button>}
+                                  </div>
+                                </form>
+                                {geminiKeyMessage && <p className="gemini-feedback success">{geminiKeyMessage}</p>}
+                                {geminiKeyError && <p className="gemini-feedback error">{geminiKeyError}</p>}
+                                <small className="gemini-security-note">Uji koneksi hanya meminta metadata model dari Google untuk memvalidasi akses. Tidak menjalankan prompt, tidak memakai token generasi, dan API key dikirim melalui HTTPS header—bukan URL.</small>
+                              </article>
             </section>
           ) : active === "Projects" ? (
             <section className="projects-view">

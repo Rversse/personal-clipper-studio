@@ -39,10 +39,26 @@ class TranscriptionCreate(BaseModel):
     language: str | None = Field(default=None, min_length=2, max_length=10)
 
 
+class TranscriptWord(BaseModel):
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
+    text: str = Field(min_length=1, max_length=100)
+    probability: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+
+
+class TranscriptWordUpdate(BaseModel):
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
+    text: str = Field(min_length=1, max_length=100)
+
+
 class TranscriptSegment(BaseModel):
-    start: float
-    end: float
+    id: int | None = None
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
     text: str
+    words: list[TranscriptWord] = Field(default_factory=list)
+
 
 
 class TranscriptionResponse(BaseModel):

@@ -27,8 +27,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "shortDescription": "Local-first video clipping workspace",
-    "category": "Video"
+    "category": "Video",
+    "resources": [
+      "resources/pcs-api/"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ]
   }
 }

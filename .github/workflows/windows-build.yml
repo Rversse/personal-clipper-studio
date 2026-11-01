@@ -1,0 +1,112 @@
+name: Windows desktop build
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-installers:
+    name: Build and smoke-test Windows installers
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Install backend and CPU transcription dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./backend[transcription]"
+          python -m pip install "pyinstaller>=6.10,<7.0"
+      - name: Build self-contained local API directory
+        run: >
+          pyinstaller --clean --noconfirm --onedir
+          --name pcs-api
+          --distpath build/windows-backend
+          --workpath build/windows-pyinstaller
+          --specpath build
+          --paths backend
+          --collect-submodules app
+          --collect-all fastapi
+          --collect-all uvicorn
+          --collect-all pydantic_settings
+          --collect-all multipart
+          --collect-all faster_whisper
+          --collect-all ctranslate2
+          --collect-all tokenizers
+          --collect-all av
+          --collect-all keyring
+          --collect-all win32ctypes
+          --hidden-import keyring.backends.Windows
+          backend/desktop_runner.py
+      - name: Stage packaged API resources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceDir = "build/windows-backend/pcs-api"
+          $resourceDir = "src-tauri/resources/pcs-api"
+          $backendExe = Join-Path $sourceDir "pcs-api.exe"
+          if (-not (Test-Path $backendExe)) {
+            throw "PyInstaller output is missing: $backendExe"
+          }
+          if (Test-Path $resourceDir) {
+            Remove-Item $resourceDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $resourceDir | Out-Null
+          Copy-Item (Join-Path $sourceDir "*") $resourceDir -Recurse -Force
+      - name: Smoke-test packaged backend executable
+        run: python scripts/smoke_test_packaged_backend.py src-tauri/resources/pcs-api/pcs-api.exe
+      - name: Build unsigned NSIS and MSI installers
+        run: npm run tauri -- build --bundles nsis,msi
+      - name: Stage installers and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifactDir = "build/windows-artifacts"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          $nsisFiles = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
+          $msiFiles = @(Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" -File)
+          if ($nsisFiles.Count -eq 0 -or $msiFiles.Count -eq 0) {
+            throw "Expected both NSIS and MSI installers, but one or both outputs are missing."
+          }
+          Copy-Item $nsisFiles.FullName $artifactDir
+          Copy-Item $msiFiles.FullName $artifactDir
+          Copy-Item "docs/WINDOWS_INSTALLATION.md" $artifactDir
+          $checksums = Get-ChildItem $artifactDir -File |
+            Where-Object { $_.Extension -in @(".exe", ".msi") } |
+            Get-FileHash -Algorithm SHA256
+          $checksums | ForEach-Object {
+            "$($_.Hash)  $([System.IO.Path]::GetFileName($_.Path))"
+          } | Set-Content (Join-Path $artifactDir "SHA256SUMS.txt")
+      - name: Install, launch, and uninstall both Windows packages
+        shell: pwsh
+        run: ./scripts/smoke_test_windows_installers.ps1 -ArtifactDirectory "build/windows-artifacts"
+      - name: Upload Windows installers
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: personal-clipper-studio-windows
+          path: build/windows-artifacts/*
+          if-no-files-found: error
+          retention-days: 7

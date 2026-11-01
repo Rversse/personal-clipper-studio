@@ -15,3 +15,37 @@ src-tauri/target/
 src-tauri/gen/
 .DS_Store
 Thumbs.db
+build/
+src-tauri/resources/*
+!src-tauri/resources/.gitkeep
+# Local runtime data and generated user content
+.cache/
+models/
+data/
+projects/
+exports/
+logs/
+*.log
+.secrets/
+
+# Credentials, private keys, and local package-manager auth
+.npmrc
+.pypirc
+.netrc
+.aws/
+.azure/
+.gcloud/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+credentials.json
+service-account*.json
+
+# SQLite runtime sidecar files
+*.db-*
+*.sqlite-*

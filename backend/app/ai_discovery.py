@@ -7,6 +7,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from . import credentials
+
 
 DISCOVERY_SCHEMA = {
     "type": "object",
@@ -45,13 +47,18 @@ def provider_settings() -> dict[str, str]:
     if provider not in {"gemini", "ollama"}:
         raise DiscoveryProviderError("Provider AI tidak dikenal. Pilih gemini atau ollama.")
     if provider == "gemini":
-        api_key = os.environ.get("PCS_GEMINI_API_KEY", "").strip()
+        try:
+            api_key = credentials.get_gemini_api_key() or ""
+        except credentials.CredentialStoreError as error:
+            raise DiscoveryProviderError(
+                "Tidak dapat membaca Gemini API key dari penyimpanan kredensial Windows."
+            ) from error
         model = os.environ.get("PCS_GEMINI_MODEL", "gemini-3.8-flash").strip()
         if not model:
             raise DiscoveryProviderError("PCS_GEMINI_MODEL tidak boleh kosong.")
         if not api_key:
             raise DiscoveryProviderError(
-                "Gemini API key belum dikonfigurasi. Set PCS_GEMINI_API_KEY di environment lokal."
+                "Gemini API key belum dikonfigurasi. Simpan key melalui Settings atau set PCS_GEMINI_API_KEY di environment lokal."
             )
         return {
             "provider": provider,
@@ -180,7 +187,7 @@ Rules:
 - Prefer ending after a complete sentence, answer, reveal, punchline, or conclusion. Include the reaction or payoff when it is part of the same moment.
 - Avoid boundaries immediately after conjunctions or unfinished words such as "dan", "karena", "yang", "tapi", or "sehingga".
 - Preserve context: include necessary setup, punchline, answer, or conclusion. Do not cut mid-sentence.
-- Use supplied segment boundaries as the primary timing references. The server will perform a second deterministic boundary pass using sentence punctuation and natural pauses.
+- Use supplied segment boundaries as semantic references. The server will perform a deterministic second pass using valid Whisper word timestamps when available, while checking sentence punctuation, conjunctions, natural pauses, and the requested duration. If word timings are missing or unusable, the server falls back to segment boundaries.
 - Prefer strong opinions, surprising facts, useful explanations, emotional moments, humor, tension, and complete stories.
 - Avoid dead air, repetitive points, greetings, ads, and fragments without context.
 - Score editorial potential from 0 to 100. Explain the score briefly in rationale.

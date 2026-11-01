@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 import mimetypes
 import json
 import os
+import re
+import unicodedata
 import uuid
 import threading
 import time
@@ -19,14 +21,113 @@ from .media import create_thumbnail, probe_media
 from .clip_boundaries import refine_candidate_boundaries
 from .schemas import (
     DiscoveryCreate, DiscoveryResponse, MediaResponse, ProjectCreate, ProjectResponse,
-    TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, ExportCreate, ExportResponse,
+    TranscriptionCreate, TranscriptionResponse, TranscriptionStatusResponse, TranscriptWordUpdate,
+    ExportCreate, ExportResponse, ExportSubtitleSegment,
 )
-from . import ai_discovery, transcription, rendering
+from . import ai_discovery, transcription, rendering, audio_analysis
+from .diagnostics import router as diagnostics_router
+from .ai_settings import router as ai_settings_router
 
 _EXPORT_WORKER_LOCK = threading.Lock()
 _EXPORT_WORKER_WAKE = threading.Event()
 _EXPORT_WORKER_THREAD: threading.Thread | None = None
 _EXPORT_WORKER_STOP = threading.Event()
+
+_JOB_CONTROLS_LOCK = threading.Lock()
+_JOB_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_JOB_SHUTDOWN = threading.Event()
+
+
+class JobCancelled(RuntimeError):
+    """Raised when a transcription or discovery job is cancelled."""
+
+
+def _register_job_control(job_id: str) -> threading.Event:
+    event = threading.Event()
+    with _JOB_CONTROLS_LOCK:
+        _JOB_CANCEL_EVENTS[job_id] = event
+        if _JOB_SHUTDOWN.is_set():
+            event.set()
+    return event
+
+
+def _unregister_job_control(job_id: str) -> None:
+    with _JOB_CONTROLS_LOCK:
+        _JOB_CANCEL_EVENTS.pop(job_id, None)
+
+
+def _cancel_background_jobs() -> None:
+    with _JOB_CONTROLS_LOCK:
+        active = list(_JOB_CANCEL_EVENTS.values())
+    for event in active:
+        event.set()
+    timestamp = now_iso()
+    with get_connection() as connection:
+        for table in ("transcription_jobs", "discovery_jobs"):
+            connection.execute(
+                f"UPDATE {table} SET status='cancelled', error='Proses dibatalkan karena aplikasi ditutup.', updated_at=? WHERE status IN ('queued','processing')",
+                (timestamp,),
+            )
+
+def _is_completed_export(path: Path) -> bool:
+    """A final output is committed atomically by the renderer; verify its MP4 signature."""
+    try:
+        if not path.is_file() or path.stat().st_size < 1024:
+            return False
+        with path.open("rb") as output:
+            return b"ftyp" in output.read(32)
+    except OSError:
+        return False
+
+
+def _cleanup_interrupted_export_artifacts(destination: Path) -> None:
+    """Remove only temporary files owned by this export's deterministic filename."""
+    partial = destination.with_name(destination.stem + ".partial" + destination.suffix)
+    partial.unlink(missing_ok=True)
+    for artifact in destination.parent.glob(f".{destination.stem}-*"):
+        if artifact.is_file():
+            artifact.unlink(missing_ok=True)
+
+
+def recover_interrupted_exports() -> None:
+    """Resume interrupted renders, preserving outputs atomically committed before a crash."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT id, output_name FROM export_jobs WHERE status='processing'"
+        ).fetchall()
+
+    for row in rows:
+        output_name = str(row["output_name"])
+        if Path(output_name).name != output_name:
+            with get_connection() as connection:
+                connection.execute(
+                    """UPDATE export_jobs SET status='failed',
+                       error='Nama file output tidak valid; export tidak dapat dipulihkan.',
+                       updated_at=? WHERE id=? AND status='processing'""",
+                    (now_iso(), row["id"]),
+                )
+            continue
+
+        destination = EXPORT_DIR / output_name
+        if _is_completed_export(destination):
+            # render_sequence uses os.replace only after FFmpeg produced a complete MP4.
+            with get_connection() as connection:
+                connection.execute(
+                    """UPDATE export_jobs SET status='completed', progress=1,
+                       error=NULL, updated_at=? WHERE id=? AND status='processing'""",
+                    (now_iso(), row["id"]),
+                )
+            continue
+
+        _cleanup_interrupted_export_artifacts(destination)
+        destination.unlink(missing_ok=True)
+        with get_connection() as connection:
+            connection.execute(
+                """UPDATE export_jobs SET status='queued', progress=0, encoder=NULL,
+                   error=NULL, updated_at=? WHERE id=? AND status='processing'""",
+                (now_iso(), row["id"]),
+            )
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -40,19 +141,20 @@ async def lifespan(_: FastAPI):
                     updated_at=? WHERE status IN ('queued','processing')""",
                 (timestamp,),
             )
-        connection.execute(
-            """UPDATE export_jobs SET status='failed',
-               error='Rendering terputus karena aplikasi sebelumnya ditutup.',
-               updated_at=? WHERE status='processing'""",
-            (timestamp,),
-        )
+    recover_interrupted_exports()
     _EXPORT_WORKER_STOP.clear()
+    _JOB_SHUTDOWN.clear()
     start_export_worker()
     yield
     _EXPORT_WORKER_STOP.set()
+    _JOB_SHUTDOWN.set()
+    _cancel_background_jobs()
     _EXPORT_WORKER_WAKE.set()
+    # Stop FFmpeg/FFprobe work before waiting for the worker to exit. This keeps
+    # the desktop shutdown path from leaving orphaned encoder processes behind.
+    rendering.cancel_all_controls()
     if _EXPORT_WORKER_THREAD is not None:
-        _EXPORT_WORKER_THREAD.join(timeout=5)
+        _EXPORT_WORKER_THREAD.join(timeout=10)
 
 
 app = FastAPI(
@@ -61,6 +163,9 @@ app = FastAPI(
     description="Local-first API for projects, media import, transcription, AI clip discovery, and exports.",
     lifespan=lifespan,
 )
+
+app.include_router(diagnostics_router)
+app.include_router(ai_settings_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -248,15 +353,30 @@ async def get_media_thumbnail(asset_id: str):
 @app.delete("/api/media/{asset_id}", status_code=204)
 async def delete_media(asset_id: str):
     with get_connection() as connection:
+        # Reserve the SQLite writer before checking job state so a new background
+        # job cannot be queued between this check and the media-row deletion.
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT * FROM media_assets WHERE id=?", (asset_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
-        active_export = connection.execute(
-            "SELECT 1 FROM export_jobs WHERE media_id=? AND status IN ('queued','processing') LIMIT 1",
-            (asset_id,),
+        active_jobs = connection.execute(
+            """SELECT 1 FROM (
+                   SELECT id FROM transcription_jobs
+                   WHERE media_id=? AND status IN ('queued','processing')
+                   UNION ALL
+                   SELECT id FROM discovery_jobs
+                   WHERE media_id=? AND status IN ('queued','processing')
+                   UNION ALL
+                   SELECT id FROM export_jobs
+                   WHERE media_id=? AND status IN ('queued','processing')
+               ) LIMIT 1""",
+            (asset_id, asset_id, asset_id),
         ).fetchone()
-        if active_export:
-            raise HTTPException(status_code=409, detail="Video tidak dapat dihapus saat export masih berjalan.")
+        if active_jobs:
+            raise HTTPException(
+                status_code=409,
+                detail="Video tidak dapat dihapus saat transkripsi, AI discovery, atau export masih berjalan.",
+            )
         exports = connection.execute(
             "SELECT output_name FROM export_jobs WHERE media_id=? AND status='completed'",
             (asset_id,),
@@ -271,64 +391,139 @@ async def delete_media(asset_id: str):
 
 
 
+def word_timing_matches_segment_text(segment_text: str, words: list[dict]) -> bool:
+    """Use word events only when their text reconstructs the complete segment."""
+    token_pattern = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+
+    def tokens(value: str) -> list[str]:
+        normalized = unicodedata.normalize("NFKC", value).casefold()
+        return token_pattern.findall(normalized)
+
+    expected = tokens(segment_text)
+    actual = tokens(" ".join(str(word.get("text", "")).strip() for word in words))
+    return bool(expected) and expected == actual
+
+
 def transcription_payload(job_id: str) -> dict:
     with get_connection() as connection:
+        # Keep job, segments, and word rows on one consistent SQLite snapshot.
+        connection.execute("BEGIN")
         job = connection.execute(
             "SELECT * FROM transcription_jobs WHERE id=?", (job_id,)
         ).fetchone()
         if job is None:
             raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
         segments = connection.execute(
-            "SELECT start,end,text FROM transcript_segments WHERE job_id=? ORDER BY start",
+            "SELECT id,start,end,text FROM transcript_segments WHERE job_id=? ORDER BY start",
             (job_id,),
         ).fetchall()
+        word_rows = connection.execute(
+            """SELECT segment_id,start,end,text,probability FROM transcript_words
+               WHERE job_id=? ORDER BY segment_id,word_index""",
+            (job_id,),
+        ).fetchall()
+
+    words_by_segment: dict[int, list[dict]] = {}
+    for word in word_rows:
+        words_by_segment.setdefault(int(word["segment_id"]), []).append({
+            "start": word["start"],
+            "end": word["end"],
+            "text": word["text"],
+            "probability": word["probability"],
+        })
+    segment_payloads = [
+        {**dict(segment), "words": words_by_segment.get(int(segment["id"]), [])}
+        for segment in segments
+    ]
     return {
         **dict(job),
-        "segments": [dict(segment) for segment in segments],
+        "segments": segment_payloads,
     }
 
 
 def run_transcription_job(job_id: str, source_path: str, model_name: str, language: str | None) -> None:
+    cancel_event = _register_job_control(job_id)
+
+    def check_cancelled() -> None:
+        if cancel_event.is_set():
+            raise JobCancelled("Transkripsi dibatalkan.")
+
     def update_progress(value: float) -> None:
+        check_cancelled()
         with get_connection() as connection:
             connection.execute(
-                "UPDATE transcription_jobs SET progress=?, updated_at=? WHERE id=?",
+                "UPDATE transcription_jobs SET progress=?, updated_at=? WHERE id=? AND status='processing'",
                 (value, now_iso(), job_id),
             )
 
     try:
+        check_cancelled()
         with get_connection() as connection:
-            connection.execute(
-                "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=?",
+            claimed = connection.execute(
+                "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=? AND status='queued'",
                 (now_iso(), job_id),
-            )
+            ).rowcount
+        if not claimed:
+            return
         result = transcription.transcribe_file(
-            Path(source_path), model_name=model_name, language=language, progress=update_progress
+            Path(source_path), model_name=model_name, language=language,
+            progress=update_progress, cancel_check=check_cancelled,
         )
+        check_cancelled()
         with get_connection() as connection:
-            connection.executemany(
-                "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
-                [
-                    (job_id, item["start"], item["end"], item["text"])
-                    for item in result["segments"]
-                ],
-            )
+            current = connection.execute(
+                "SELECT status FROM transcription_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if current is None or current["status"] != "processing":
+                raise JobCancelled("Transkripsi dibatalkan.")
+            connection.execute("DELETE FROM transcript_segments WHERE job_id=?", (job_id,))
+            for item in result["segments"]:
+                cursor = connection.execute(
+                    "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
+                    (job_id, item["start"], item["end"], item["text"]),
+                )
+                segment_id = cursor.lastrowid
+                valid_words = []
+                previous_word_end = float(item["start"])
+                for word in item.get("words", []):
+                    try:
+                        start = float(word["start"])
+                        end = float(word["end"])
+                        word_text = str(word["text"]).strip()
+                        raw_probability = word.get("probability")
+                        probability = float(raw_probability) if raw_probability is not None else None
+                        import math
+                        if (
+                            word_text and math.isfinite(start) and math.isfinite(end)
+                            and item["start"] <= previous_word_end <= start < end <= item["end"]
+                            and (probability is None or math.isfinite(probability) and 0 <= probability <= 1)
+                        ):
+                            valid_words.append((job_id, segment_id, len(valid_words), start, end, word_text, probability))
+                            previous_word_end = end
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        continue
+                connection.executemany(
+                    "INSERT INTO transcript_words(job_id,segment_id,word_index,start,end,text,probability) VALUES(?,?,?,?,?,?,?)",
+                    valid_words,
+                )
             connection.execute(
-                """UPDATE transcription_jobs
-                   SET status='completed', progress=1, detected_language=?,
-                       language_probability=?, duration=?, updated_at=?
-                   WHERE id=?""",
-                (
-                    result["language"], result["language_probability"],
-                    result["duration"], now_iso(), job_id,
-                ),
+                "UPDATE transcription_jobs SET status='completed', progress=1, detected_language=?, language_probability=?, duration=?, error=NULL, updated_at=? WHERE id=? AND status='processing'",
+                (result["language"], result["language_probability"], result["duration"], now_iso(), job_id),
+            )
+    except JobCancelled as error:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
+                (str(error), now_iso(), job_id),
             )
     except Exception as error:
         with get_connection() as connection:
             connection.execute(
-                "UPDATE transcription_jobs SET status='failed', error=?, updated_at=? WHERE id=?",
+                "UPDATE transcription_jobs SET status='failed', error=?, updated_at=? WHERE id=? AND status='processing'",
                 (str(error)[:2000], now_iso(), job_id),
             )
+    finally:
+        _unregister_job_control(job_id)
 
 
 @app.post(
@@ -346,10 +541,31 @@ async def start_transcription(
             status_code=503,
             detail="Whisper belum terpasang. Install dengan: pip install -e \"backend[transcription]\"",
         )
-    source_path, _ = media_file(asset_id)
+    model_preflight = transcription.whisper_model_preflight(payload.model_name)
+    if model_preflight["disk_space_known"] and not model_preflight["disk_space_ok"]:
+        required_mb = (model_preflight["required_free_bytes"] + 1024**2 - 1) // 1024**2
+        free_mb = model_preflight["free_bytes"] // 1024**2
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Ruang disk tidak cukup untuk model Whisper {payload.model_name}. "
+                f"Perlu sekitar {required_mb} MB ruang kosong; tersedia {free_mb} MB. "
+                "Kosongkan ruang disk atau pilih model yang lebih kecil."
+            ),
+        )
     job_id = str(uuid.uuid4())
     timestamp = now_iso()
     with get_connection() as connection:
+        # Serialize with media deletion so a stale file lookup cannot queue an orphan job.
+        connection.execute("BEGIN IMMEDIATE")
+        media = connection.execute(
+            "SELECT stored_name FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        if media is None:
+            raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
+        source_path = MEDIA_DIR / media["stored_name"]
+        if not source_path.is_file():
+            raise HTTPException(status_code=404, detail="File media tidak ditemukan di penyimpanan.")
         connection.execute(
             """INSERT INTO transcription_jobs(
                 id,media_id,status,model_name,language,created_at,updated_at
@@ -364,6 +580,97 @@ async def start_transcription(
 
 @app.get("/api/transcriptions/{job_id}", response_model=TranscriptionResponse)
 async def get_transcription(job_id: str):
+    return transcription_payload(job_id)
+
+
+@app.post("/api/transcriptions/{job_id}/cancel", response_model=TranscriptionStatusResponse)
+async def cancel_transcription(job_id: str):
+    with _JOB_CONTROLS_LOCK:
+        event = _JOB_CANCEL_EVENTS.get(job_id)
+    if event:
+        event.set()
+    with get_connection() as connection:
+        row = connection.execute(
+            "UPDATE transcription_jobs SET status='cancelled', error='Transkripsi dibatalkan oleh pengguna.', updated_at=? WHERE id=? AND status IN ('queued','processing') RETURNING *",
+            (now_iso(), job_id),
+        ).fetchone()
+    if row is None:
+        with get_connection() as connection:
+            exists = connection.execute("SELECT status FROM transcription_jobs WHERE id=?", (job_id,)).fetchone()
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Transkripsi tidak ditemukan.")
+        raise HTTPException(status_code=409, detail="Transkripsi sudah selesai atau tidak dapat dibatalkan.")
+    return dict(row)
+
+
+@app.post("/api/discovery/{job_id}/cancel", response_model=DiscoveryResponse)
+async def cancel_discovery(job_id: str):
+    with _JOB_CONTROLS_LOCK:
+        event = _JOB_CANCEL_EVENTS.get(job_id)
+    if event:
+        event.set()
+    with get_connection() as connection:
+        row = connection.execute(
+            "UPDATE discovery_jobs SET status='cancelled', error='Analisis AI dibatalkan oleh pengguna.', updated_at=? WHERE id=? AND status IN ('queued','processing') RETURNING id",
+            (now_iso(), job_id),
+        ).fetchone()
+    if row is None:
+        with get_connection() as connection:
+            exists = connection.execute("SELECT status FROM discovery_jobs WHERE id=?", (job_id,)).fetchone()
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Analisis AI tidak ditemukan.")
+        raise HTTPException(status_code=409, detail="Analisis AI sudah selesai atau tidak dapat dibatalkan.")
+    return discovery_payload(job_id)
+
+
+@app.patch("/api/transcriptions/{job_id}/segments/{segment_id}/words/{word_index}")
+async def update_transcript_word(
+    job_id: str,
+    segment_id: int,
+    word_index: int,
+    payload: TranscriptWordUpdate,
+):
+    import math
+
+    if not math.isfinite(payload.start) or not math.isfinite(payload.end) or payload.end <= payload.start:
+        raise HTTPException(status_code=422, detail="Rentang waktu kata tidak valid.")
+    if not payload.text.strip():
+        raise HTTPException(status_code=422, detail="Teks kata tidak boleh kosong.")
+    with get_connection() as connection:
+        # Serialize adjacent-word validation and update to prevent concurrent overlap.
+        connection.execute("BEGIN IMMEDIATE")
+        segment = connection.execute(
+            "SELECT start,end FROM transcript_segments WHERE id=? AND job_id=?",
+            (segment_id, job_id),
+        ).fetchone()
+        if segment is None:
+            raise HTTPException(status_code=404, detail="Segmen transkrip tidak ditemukan.")
+        word = connection.execute(
+            """SELECT id FROM transcript_words
+               WHERE job_id=? AND segment_id=? AND word_index=?""",
+            (job_id, segment_id, word_index),
+        ).fetchone()
+        if word is None:
+            raise HTTPException(status_code=404, detail="Timestamp kata tidak ditemukan.")
+        previous = connection.execute(
+            "SELECT start,end FROM transcript_words WHERE segment_id=? AND word_index=?",
+            (segment_id, word_index - 1),
+        ).fetchone() if word_index > 0 else None
+        following = connection.execute(
+            "SELECT start,end FROM transcript_words WHERE segment_id=? AND word_index=?",
+            (segment_id, word_index + 1),
+        ).fetchone()
+        if payload.start < segment["start"] or payload.end > segment["end"]:
+            raise HTTPException(status_code=422, detail="Timestamp kata harus berada di dalam rentang segmen.")
+        if previous and payload.start < previous["end"]:
+            raise HTTPException(status_code=422, detail="Timestamp kata bertabrakan dengan kata sebelumnya.")
+        if following and payload.end > following["start"]:
+            raise HTTPException(status_code=422, detail="Timestamp kata bertabrakan dengan kata berikutnya.")
+        connection.execute(
+            """UPDATE transcript_words SET start=?,end=?,text=?
+               WHERE job_id=? AND segment_id=? AND word_index=?""",
+            (payload.start, payload.end, payload.text.strip(), job_id, segment_id, word_index),
+        )
     return transcription_payload(job_id)
 
 
@@ -391,6 +698,7 @@ def normalize_candidate(
     min_duration: int,
     max_duration: int,
     context_segments: list[dict] | None = None,
+    audio_features: dict | None = None,
 ) -> dict | None:
     import math
 
@@ -412,7 +720,8 @@ def normalize_candidate(
         return None
 
     refined = refine_candidate_boundaries(
-        target_start, target_end, context_segments or chunk, min_duration, max_duration
+        target_start, target_end, context_segments or chunk, min_duration, max_duration,
+        audio_features=audio_features,
     )
     if refined is None:
         return None
@@ -447,7 +756,14 @@ def normalize_candidate(
 
 
 def run_discovery_job(job_id: str) -> None:
+    cancel_event = _register_job_control(job_id)
+
+    def check_cancelled() -> None:
+        if cancel_event.is_set():
+            raise JobCancelled("Analisis AI dibatalkan.")
+
     try:
+        check_cancelled()
         with get_connection() as connection:
             job = connection.execute(
                 "SELECT * FROM discovery_jobs WHERE id=?", (job_id,)
@@ -455,25 +771,60 @@ def run_discovery_job(job_id: str) -> None:
             if job is None:
                 return
             segments = connection.execute(
-                """SELECT start,end,text FROM transcript_segments
+                """SELECT id,start,end,text FROM transcript_segments
                    WHERE job_id=?
                    ORDER BY start""",
                 (job["transcription_id"],),
             ).fetchall()
-        transcript = [dict(item) for item in segments]
+            word_rows = connection.execute(
+                """SELECT segment_id,start,end,text,probability FROM transcript_words
+                   WHERE job_id=? ORDER BY segment_id,word_index""",
+                (job["transcription_id"],),
+            ).fetchall()
+            media = connection.execute(
+                "SELECT stored_name,duration FROM media_assets WHERE id=?",
+                (job["media_id"],),
+            ).fetchone()
+        words_by_segment: dict[int, list[dict]] = {}
+        for word in word_rows:
+            words_by_segment.setdefault(int(word["segment_id"]), []).append({
+                "start": word["start"],
+                "end": word["end"],
+                "text": word["text"],
+                "probability": word["probability"],
+            })
+        transcript = [
+            {**dict(item), "words": words_by_segment.get(int(item["id"]), [])}
+            for item in segments
+        ]
         if not transcript:
             raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
+
+        with get_connection() as connection:
+            claimed = connection.execute(
+                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=? AND status='queued'",
+                (now_iso(), job_id),
+            ).rowcount
+        if not claimed:
+            return
+        check_cancelled()
+
+        audio_features = None
+        if media is not None:
+            try:
+                source_path = MEDIA_DIR / media["stored_name"]
+                audio_features = audio_analysis.analyze_audio(
+                    source_path, duration=media["duration"]
+                )
+            except Exception:
+                # Prosody is supplemental; unavailable audio analysis must not block discovery.
+                audio_features = None
         chunks = ai_discovery.split_transcript(transcript)
         if not chunks:
             raise ValueError("Transkrip kosong atau tidak dapat dibagi menjadi bagian analisis.")
 
-        with get_connection() as connection:
-            connection.execute(
-                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=?",
-                (now_iso(), job_id),
-            )
-
         for chunk_index, chunk in enumerate(chunks):
+            check_cancelled()
             raw_candidates = ai_discovery.analyze_transcript_chunk(
                 chunk,
                 mode=job["mode"],
@@ -481,6 +832,7 @@ def run_discovery_job(job_id: str) -> None:
                 min_duration=job["min_duration"],
                 max_duration=job["max_duration"],
             )
+            check_cancelled()
             accepted: list[dict] = []
             for raw in raw_candidates:
                 if not isinstance(raw, dict):
@@ -488,6 +840,7 @@ def run_discovery_job(job_id: str) -> None:
                 candidate = normalize_candidate(
                     raw, chunk, job["min_duration"], job["max_duration"],
                     context_segments=transcript,
+                    audio_features=audio_features,
                 )
                 if candidate is None or candidate["score"] < 40:
                     continue
@@ -510,6 +863,11 @@ def run_discovery_job(job_id: str) -> None:
                 accepted.append(candidate)
 
             with get_connection() as connection:
+                current = connection.execute(
+                    "SELECT status FROM discovery_jobs WHERE id=?", (job_id,)
+                ).fetchone()
+                if current is None or current["status"] != "processing":
+                    raise JobCancelled("Analisis AI dibatalkan.")
                 existing_rows = connection.execute(
                     "SELECT start_seconds,end_seconds FROM clip_candidates WHERE discovery_job_id=?",
                     (job_id,),
@@ -554,17 +912,26 @@ def run_discovery_job(job_id: str) -> None:
                     (progress, now_iso(), job_id),
                 )
 
+        check_cancelled()
         with get_connection() as connection:
             connection.execute(
-                "UPDATE discovery_jobs SET status='completed', progress=1, updated_at=? WHERE id=?",
+                "UPDATE discovery_jobs SET status='completed', progress=1, error=NULL, updated_at=? WHERE id=? AND status='processing'",
                 (now_iso(), job_id),
+            )
+    except JobCancelled as error:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE discovery_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
+                (str(error), now_iso(), job_id),
             )
     except Exception as error:
         with get_connection() as connection:
             connection.execute(
-                "UPDATE discovery_jobs SET status='failed', error=?, updated_at=? WHERE id=?",
+                "UPDATE discovery_jobs SET status='failed', error=?, updated_at=? WHERE id=? AND status='processing'",
                 (str(error)[:2000], now_iso(), job_id),
             )
+    finally:
+        _unregister_job_control(job_id)
 
 
 @app.post(
@@ -590,7 +957,11 @@ async def start_discovery(
     except ai_discovery.DiscoveryProviderError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
+    job_id = str(uuid.uuid4())
+    timestamp = now_iso()
     with get_connection() as connection:
+        # Claim the write transaction before validating references and inserting the job.
+        connection.execute("BEGIN IMMEDIATE")
         media = connection.execute(
             "SELECT id FROM media_assets WHERE id=?", (asset_id,)
         ).fetchone()
@@ -601,16 +972,12 @@ async def start_discovery(
                WHERE id=? AND media_id=?""",
             (payload.transcription_id, asset_id),
         ).fetchone()
-    if transcript is None:
-        raise HTTPException(status_code=404, detail="Transkrip untuk video ini tidak ditemukan.")
-    if transcript["status"] != "completed":
-        raise HTTPException(
-            status_code=409, detail="Transkripsi harus selesai sebelum analisis AI dimulai."
-        )
-
-    job_id = str(uuid.uuid4())
-    timestamp = now_iso()
-    with get_connection() as connection:
+        if transcript is None:
+            raise HTTPException(status_code=404, detail="Transkrip untuk video ini tidak ditemukan.")
+        if transcript["status"] != "completed":
+            raise HTTPException(
+                status_code=409, detail="Transkripsi harus selesai sebelum analisis AI dimulai."
+            )
         connection.execute(
             """INSERT INTO discovery_jobs(
                 id,media_id,transcription_id,status,provider,model_name,mode,category,
@@ -703,6 +1070,10 @@ def export_payload(job_id: str) -> dict:
 
 def run_export_job(job_id: str, source_path: str, destination_path: str) -> None:
     control = rendering.register_control(job_id)
+    # Close the race where shutdown begins after the worker dequeues a job but
+    # before its render control is visible to cancel_all_controls().
+    if _EXPORT_WORKER_STOP.is_set():
+        control.cancel()
 
     def update_progress(value: float) -> None:
         with get_connection() as connection:
@@ -868,6 +1239,53 @@ async def start_export(
     for segment in clip_segments:
         if segment["end"] <= segment["start"]:
             raise HTTPException(status_code=422, detail="Titik akhir setiap klip harus lebih besar dari titik awal.")
+    if payload.burn_subtitles and not payload.subtitle_segments:
+        with get_connection() as connection:
+            transcript_job = connection.execute(
+                """SELECT id FROM transcription_jobs
+                   WHERE media_id=? AND status='completed'
+                   ORDER BY created_at DESC LIMIT 1""",
+                (asset_id,),
+            ).fetchone()
+            if transcript_job:
+                subtitle_rows = connection.execute(
+                    """SELECT s.id,s.start AS segment_start,s.end AS segment_end,s.text,
+                              w.start,w.end,w.text AS word_text
+                       FROM transcript_segments s
+                       LEFT JOIN transcript_words w ON w.segment_id=s.id
+                       WHERE s.job_id=? ORDER BY s.start,w.word_index""",
+                    (transcript_job["id"],),
+                ).fetchall()
+                segments_by_id: dict[int, dict] = {}
+                for row in subtitle_rows:
+                    segment_id = int(row["id"])
+                    segment = segments_by_id.setdefault(segment_id, {
+                        "start": row["segment_start"],
+                        "end": row["segment_end"],
+                        "text": row["text"],
+                        "words": [],
+                    })
+                    if row["word_text"] is not None:
+                        segment["words"].append({
+                            "start": row["start"],
+                            "end": row["end"],
+                            "text": row["word_text"],
+                        })
+                for segment in segments_by_id.values():
+                    if segment["words"] and word_timing_matches_segment_text(segment["text"], segment["words"]):
+                        payload.subtitle_segments.extend(
+                            ExportSubtitleSegment(**word) for word in segment["words"]
+                        )
+                    else:
+                        # Missing or malformed word timestamps must not silently
+                        # remove text from the rendered subtitle.
+                        payload.subtitle_segments.append(
+                            ExportSubtitleSegment(
+                                start=segment["start"],
+                                end=segment["end"],
+                                text=segment["text"],
+                            )
+                        )
     try:
         rendering.available_encoder()
         if payload.burn_subtitles and not rendering.subtitles_filter_available():
@@ -915,6 +1333,13 @@ async def start_export(
         "normalize_audio": payload.normalize_audio,
     })
     with get_connection() as connection:
+        # Serialize the final media check and queue insert with media deletion.
+        connection.execute("BEGIN IMMEDIATE")
+        current_media = connection.execute(
+            "SELECT 1 FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        if current_media is None:
+            raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
         connection.execute(
             """INSERT INTO export_jobs(
                 id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import uuid
 
@@ -35,6 +36,121 @@ def seed_media():
             (media_id, project_id, "source.mp4", "source.mp4", "video/mp4", 12, 120.0, timestamp),
         )
     return media_id
+
+
+def _seed_interrupted_export(job_id, output_name):
+    timestamp = "2026-11-01T00:00:00+00:00"
+    with database.get_connection() as connection:
+        media = connection.execute("SELECT id FROM media_assets LIMIT 1").fetchone()
+        if media is None:
+            raise AssertionError("Test media must be seeded before creating an export job.")
+        connection.execute(
+            """INSERT INTO export_jobs(
+                id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
+                progress,created_at,updated_at
+            ) VALUES(?,?,'processing',0,30,'9:16',?,0.65,?,?)""",
+            (job_id, media["id"], output_name, timestamp, timestamp),
+        )
+
+
+def test_recovery_requeues_interrupted_render_and_removes_only_its_temp_files(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    database.ensure_storage()
+    seed_media()
+    job_id = str(uuid.uuid4())
+    output_name = f"clip-{job_id}.mp4"
+    destination = database.EXPORT_DIR / output_name
+    _seed_interrupted_export(job_id, output_name)
+
+    partial = destination.with_name(destination.stem + ".partial" + destination.suffix)
+    part = destination.parent / f".{destination.stem}-stale-001.mp4"
+    concat = destination.parent / f".{destination.stem}-stale.ffconcat"
+    subtitle = destination.parent / f".{destination.stem}-stale.ass"
+    unrelated = destination.parent / ".clip-another-job-stale-001.mp4"
+    for path in (partial, part, concat, subtitle, unrelated):
+        path.write_bytes(b"temporary")
+
+    main_module.recover_interrupted_exports()
+
+    with database.get_connection() as connection:
+        job = connection.execute("SELECT * FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+    assert job["status"] == "queued"
+    assert job["progress"] == 0
+    assert job["encoder"] is None
+    assert job["error"] is None
+    for path in (partial, part, concat, subtitle):
+        assert not path.exists()
+    assert unrelated.exists()
+
+
+def test_recovery_keeps_atomically_committed_mp4_and_marks_job_completed(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    database.ensure_storage()
+    seed_media()
+    job_id = str(uuid.uuid4())
+    output_name = f"clip-{job_id}.mp4"
+    destination = database.EXPORT_DIR / output_name
+    _seed_interrupted_export(job_id, output_name)
+    destination.write_bytes(bytes([0, 0, 0, 24]) + b"ftypisom" + b"x" * 1200)
+
+    main_module.recover_interrupted_exports()
+
+    with database.get_connection() as connection:
+        job = connection.execute("SELECT * FROM export_jobs WHERE id=?", (job_id,)).fetchone()
+    assert job["status"] == "completed"
+    assert job["progress"] == 1
+    assert job["error"] is None
+    assert destination.is_file()
+    assert destination.stat().st_size > 1024
+
+
+def test_real_ffmpeg_sequence_render_produces_vertical_h264_aac_mp4(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        import pytest
+        pytest.skip("FFmpeg and FFprobe are required for the real-media integration test.")
+
+    source = tmp_path / "synthetic-source.mp4"
+    output = tmp_path / "synthetic-short.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "color=c=blue:s=640x360:r=30:d=2",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2",
+            "-shortest", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac",
+            str(source),
+        ],
+        check=True, capture_output=True, timeout=60,
+    )
+    monkeypatch.setattr(rendering, "available_encoder", lambda *_args: "libx264")
+    result = rendering.render_sequence(
+        source, output,
+        [{"start": 0.25, "end": 1.75, "crop_zoom": 1, "crop_x": 0.5, "crop_y": 0.5, "audio_volume": 1}],
+        "9:16", quality_profile="balanced", frame_rate=30,
+    )
+    assert result["encoder"] == "libx264"
+    assert output.is_file() and output.stat().st_size > 1024
+
+    probe = subprocess.run(
+        [
+            ffprobe, "-v", "error", "-show_entries",
+            "stream=codec_name,codec_type,width,height:format=duration",
+            "-of", "json", str(output),
+        ],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    metadata = json.loads(probe.stdout)
+    streams = metadata["streams"]
+    video = next(stream for stream in streams if stream["codec_type"] == "video")
+    audio = next(stream for stream in streams if stream["codec_type"] == "audio")
+    assert (video["width"], video["height"]) == (1080, 1920)
+    assert video["codec_name"] == "h264"
+    assert audio["codec_name"] == "aac"
+    assert 1.35 <= float(metadata["format"]["duration"]) <= 1.65
 
 
 def test_render_command_has_trim_crop_and_safe_audio_mapping(tmp_path):
@@ -555,6 +671,35 @@ def test_render_control_kills_attached_process():
         raise AssertionError("Cancelled control must reject continued work")
 
 
+def test_cancel_all_controls_terminates_every_active_render():
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+        def poll(self):
+            return self.returncode
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+        def wait(self, timeout=None):
+            return self.returncode
+        def kill(self):
+            self.returncode = -9
+
+    controls = [rendering.register_control(f"shutdown-{index}") for index in range(2)]
+    processes = [FakeProcess() for _ in controls]
+    try:
+        for control, process in zip(controls, processes):
+            control.attach(process)
+
+        assert rendering.cancel_all_controls() == 2
+        assert all(process.terminated for process in processes)
+        assert all(control._cancelled.is_set() for control in controls)
+    finally:
+        for index in range(len(controls)):
+            rendering.unregister_control(f"shutdown-{index}")
+
+
 def test_execute_honors_pre_cancelled_control(monkeypatch):
     control = rendering.RenderControl()
     control.cancel()
@@ -592,6 +737,36 @@ def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
         assert client.post(f"/api/exports/{job_id}/cancel").status_code == 409
+
+
+def test_export_dequeued_during_shutdown_is_cancelled_before_render(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 20},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+
+        main_module._EXPORT_WORKER_STOP.set()
+        main_module.run_export_job(
+            job_id,
+            str(database.MEDIA_DIR / "source.mp4"),
+            str(database.EXPORT_DIR / response.json()["output_name"]),
+        )
+
+        with database.get_connection() as connection:
+            job = connection.execute(
+                "SELECT status,error FROM export_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+        assert job["status"] == "cancelled"
+        assert "dibatalkan" in job["error"].casefold()
+        assert rendering.get_control(job_id) is None
 
 
 def test_execute_terminates_running_process_when_cancelled(monkeypatch):
@@ -999,3 +1174,126 @@ def test_export_worker_uses_persisted_render_settings(tmp_path, monkeypatch):
     assert captured["quality_profile"] == "high"
     assert captured["frame_rate"] == 60
     assert captured["normalize_audio"] is True
+
+
+
+def test_auto_subtitles_fall_back_to_segment_when_word_timestamps_are_partial(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda: True)
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        timestamp = main_module.now_iso()
+        transcription_id = str(uuid.uuid4())
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,?,'completed','tiny',?,?)""",
+                (transcription_id, media_id, timestamp, timestamp),
+            )
+            segment_cursor = connection.execute(
+                """INSERT INTO transcript_segments(job_id,start,end,text)
+                   VALUES(?,?,?,?)""",
+                (transcription_id, 2.0, 4.0, "satu dua tiga"),
+            )
+            segment_id = segment_cursor.lastrowid
+            connection.executemany(
+                """INSERT INTO transcript_words(
+                    job_id,segment_id,word_index,start,end,text,probability
+                ) VALUES(?,?,?,?,?,?,?)""",
+                [
+                    (transcription_id, segment_id, 0, 2.0, 2.4, "satu", 0.9),
+                    # The missing "dua" must force segment-level fallback.
+                    (transcription_id, segment_id, 1, 3.2, 3.8, "tiga", 0.9),
+                ],
+            )
+
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 0,
+                "end_seconds": 10,
+                "burn_subtitles": True,
+                "subtitle_segments": [],
+            },
+        )
+        assert response.status_code == 202
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT subtitle_payload FROM export_jobs WHERE id=?",
+                (response.json()["id"],),
+            ).fetchone()
+        saved = json.loads(row["subtitle_payload"])
+        assert saved == [{"start": 2.0, "end": 4.0, "text": "satu dua tiga"}]
+
+
+def test_auto_subtitles_use_word_events_when_text_matches_segment(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda: True)
+    monkeypatch.setattr(main_module, "run_export_job", lambda *args: None)
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        timestamp = main_module.now_iso()
+        transcription_id = str(uuid.uuid4())
+        with database.get_connection() as connection:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,?,'completed','tiny',?,?)""",
+                (transcription_id, media_id, timestamp, timestamp),
+            )
+            segment_cursor = connection.execute(
+                """INSERT INTO transcript_segments(job_id,start,end,text)
+                   VALUES(?,?,?,?)""",
+                (transcription_id, 2.0, 4.0, "Satu, dua!"),
+            )
+            segment_id = segment_cursor.lastrowid
+            connection.executemany(
+                """INSERT INTO transcript_words(
+                    job_id,segment_id,word_index,start,end,text,probability
+                ) VALUES(?,?,?,?,?,?,?)""",
+                [
+                    (transcription_id, segment_id, 0, 2.0, 2.4, "Satu,", 0.9),
+                    (transcription_id, segment_id, 1, 2.5, 3.0, "dua!", 0.9),
+                ],
+            )
+
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={
+                "start_seconds": 0,
+                "end_seconds": 10,
+                "burn_subtitles": True,
+                "subtitle_segments": [],
+            },
+        )
+        assert response.status_code == 202
+        with database.get_connection() as connection:
+            row = connection.execute(
+                "SELECT subtitle_payload FROM export_jobs WHERE id=?",
+                (response.json()["id"],),
+            ).fetchone()
+        saved = json.loads(row["subtitle_payload"])
+        assert saved == [
+            {"start": 2.0, "end": 2.4, "text": "Satu,"},
+            {"start": 2.5, "end": 3.0, "text": "dua!"},
+        ]
+
+
+
+
+def test_escape_filter_path_handles_windows_drive_and_special_characters(monkeypatch, tmp_path):
+    class WindowsResolvedPath:
+        def __str__(self):
+            return r"C:\Users\Editor\A, [take]'s subtitle.ass"
+
+    monkeypatch.setattr(Path, "resolve", lambda _self: WindowsResolvedPath())
+
+    escaped = rendering._escape_filter_path(tmp_path / "ignored.ass")
+
+    assert escaped == r"C\:/Users/Editor/A\, \[take\]\'s subtitle.ass"
