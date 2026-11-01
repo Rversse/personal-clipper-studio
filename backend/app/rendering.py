@@ -368,7 +368,10 @@ def render_clip(
     crop_x: float = 0.5,
     crop_y: float = 0.5,
     subtitle_style: dict | None = None,
+    control: RenderControl | None = None,
 ) -> dict[str, str]:
+    if control:
+        control.check()
     if not source.is_file():
         raise RenderError("File video sumber tidak ditemukan.")
     if aspect_ratio not in OUTPUT_SIZES:
@@ -397,7 +400,7 @@ def render_clip(
             subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, subtitle_style
         )
         try:
-            _execute(command, duration, progress)
+            _execute(command, duration, progress, control)
         except RenderError:
             if encoder != "h264_nvenc":
                 raise
@@ -407,7 +410,7 @@ def render_clip(
                 source, temporary_output, start_seconds, end_seconds, aspect_ratio, encoder, ffmpeg,
                 subtitle_file, subtitle_preset, crop_zoom, crop_x, crop_y, subtitle_style
             )
-            _execute(cpu_command, duration, progress)
+            _execute(cpu_command, duration, progress, control)
         if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
             raise RenderError("FFmpeg selesai tetapi file hasil tidak valid atau terlalu kecil.")
         os.replace(temporary_output, destination)
@@ -433,7 +436,10 @@ def render_sequence(
     crop_x: float = 0.5,
     crop_y: float = 0.5,
     subtitle_style: dict | None = None,
+    control: RenderControl | None = None,
 ) -> dict[str, str]:
+    if control:
+        control.check()
     if not source.is_file():
         raise RenderError("File video sumber tidak ditemukan.")
     if not segments or len(segments) > 100:
@@ -469,6 +475,8 @@ def render_sequence(
     try:
         temporary_output.unlink(missing_ok=True)
         for index, ((start, end), part_path) in enumerate(zip(normalized, part_paths)):
+            if control:
+                control.check()
             def segment_progress(value: float, *, base: float = completed_duration, length: float = end - start) -> None:
                 if progress:
                     progress(min(0.98, (base + length * value) / total_duration * 0.95))
@@ -477,7 +485,7 @@ def render_sequence(
                 progress=segment_progress, subtitle_segments=subtitle_segments,
                 subtitle_preset=subtitle_preset,
                 crop_zoom=crop_zoom, crop_x=crop_x, crop_y=crop_y,
-                subtitle_style=subtitle_style,
+                subtitle_style=subtitle_style, control=control,
             )
             encoders.append(result["encoder"])
             completed_duration += end - start
@@ -498,17 +506,20 @@ def render_sequence(
             final_encoder = "libx264"
         concat_command += ["-movflags", "+faststart", str(temporary_output)]
         try:
-            result = subprocess.run(
-                concat_command, capture_output=True, text=True, timeout=6 * 60 * 60, check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise RenderError("Penggabungan klip melewati batas waktu 6 jam.") from error
-        except OSError as error:
-            raise RenderError("Gagal menjalankan FFmpeg concat: {}".format(error)) from error
-        if result.returncode != 0:
-            raise RenderError((result.stderr or "FFmpeg gagal menggabungkan klip.")[-3000:])
+            if control:
+                control.check()
+            concat_command = concat_command[:-1] + ["-progress", "pipe:1", "-nostats", concat_command[-1]]
+            _execute(concat_command, total_duration, progress, control)
+        except RenderCancelled:
+            raise
+        except RenderError as error:
+            if "Rendering melewati batas waktu" in str(error):
+                raise RenderError("Penggabungan klip melewati batas waktu 6 jam.") from error
+            raise RenderError("FFmpeg concat gagal: {}".format(error)) from error
         if not temporary_output.is_file() or temporary_output.stat().st_size < 1024:
             raise RenderError("Hasil gabungan tidak valid atau terlalu kecil.")
+        if control:
+            control.check()
         os.replace(temporary_output, destination)
         if progress:
             progress(1.0)
