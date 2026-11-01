@@ -111,5 +111,5 @@ jobs:
         with:
           name: personal-clipper-studio-windows
           path: build/windows-artifacts/*
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
