@@ -807,6 +807,7 @@ def test_export_api_rejects_audio_gain_outside_supported_range(tmp_path, monkeyp
 def test_export_api_rejects_edited_caption_outside_source_duration(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(rendering, "subtitles_filter_available", lambda: True)
     with TestClient(app) as client:
         media_id = seed_media()
         response = client.post(
