@@ -119,4 +119,12 @@ Bug reports and focused pull requests are welcome. Read [CONTRIBUTING.md](CONTRI
 
 ## License
 
-This repository currently has **no license file**. Public visibility does not automatically grant permission to reuse, modify, distribute, or commercially exploit the source code. All rights remain with the respective copyright holders unless a license is added. A license will be added only after the project owner chooses the intended terms.
+Unless a file or component states otherwise, the original source code in this repository is licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**. See [LICENSE](LICENSE) for the complete license text.
+
+Copyright (C) 2026 Rversse.
+
+GPL-3.0-or-later permits use, modification, and redistribution, including commercial redistribution. If you distribute a modified or combined covered version, you must comply with the GPL's applicable source-code and notice requirements. Private modification and internal use do not, by themselves, require publication of your changes.
+
+Third-party libraries, tools, icons, and other assets remain under their own respective licenses; this project license does not replace those terms. Review the relevant upstream notices before redistributing a build.
+
+This project is provided without warranty, to the extent permitted by applicable law.
