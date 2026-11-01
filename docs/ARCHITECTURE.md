@@ -51,3 +51,8 @@ Import → probe metadata → transcribe → discover candidate moments → user
 - Packaged startup checks that the API port is free before launching the child.
 - API keys must be supplied by the user and stored outside source control.
 - Users must own or have permission to process source video. No arbitrary third-party YouTube downloading is assumed.
+
+
+### Transcription and AI discovery cancellation
+
+Transcription and AI discovery jobs expose explicit cancellation endpoints. Cancellation is persisted immediately; Whisper checks the cancellation signal between decoded segments, while AI discovery checks between analysis chunks and after provider calls. A currently executing native Whisper inference segment or in-flight provider HTTP request is not forcibly interrupted; its result is discarded when control returns. Application shutdown signals active jobs and persists their cancelled state.
