@@ -6,8 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import urllib.error
-import urllib.request
 from typing import Any
 from urllib.parse import urlsplit
 
