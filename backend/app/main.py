@@ -41,10 +41,19 @@ _JOB_SHUTDOWN = threading.Event()
 
 # A session token is injected only by the packaged Tauri host. Running the API
 # manually for local development remains possible without desktop IPC.
-_API_SESSION_TOKEN = os.environ.get("PCS_API_SESSION_TOKEN")
+_API_SESSION_TOKEN: str | None = None
 _RESOURCE_TICKETS: dict[str, tuple[str, float]] = {}
 _RESOURCE_TICKETS_LOCK = threading.Lock()
 _RESOURCE_TICKET_TTL_SECONDS = 3600
+
+def configure_session_token(token: str) -> None:
+    """Bind the API to the one-time token received from the Tauri parent process."""
+    global _API_SESSION_TOKEN
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", token):
+        raise ValueError("Invalid desktop session token.")
+    _API_SESSION_TOKEN = token
+
+
 
 
 def issue_resource_ticket(resource_path: str) -> str:
@@ -208,10 +217,10 @@ app.include_router(ai_settings_router)
 
 @app.middleware("http")
 async def enforce_trusted_browser_origin(request, call_next):
-    """Block cross-origin browser requests to the unauthenticated loopback API.
+    """Enforce browser-origin, local-host, and desktop-session boundaries.
 
-    Native/local clients without an Origin header remain supported. Browser requests
-    must originate from the desktop UI or the explicitly allowed development UI.
+    The packaged desktop host configures a per-launch token. Development servers
+    started independently remain usable without the Tauri session channel.
     """
     origin = request.headers.get("origin")
     if origin is not None:
