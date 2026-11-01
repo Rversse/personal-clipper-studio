@@ -334,6 +334,11 @@ function App() {
 
   useEffect(() => {
     if (!aiMediaId) return;
+    setClipSequence([]);
+    setSelectedSequenceIndex(null);
+    setCropZoom(1);
+    setCropX(0.5);
+    setCropY(0.5);
     try {
       const saved = localStorage.getItem("pcs-editor-" + aiMediaId);
       if (saved) {
@@ -348,8 +353,11 @@ function App() {
         setSubtitleOutline(Math.max(0, Math.min(8, parsed.subtitleOutline ?? 2)));
         setSubtitleBackground(Math.max(0, Math.min(90, parsed.subtitleBackground ?? 0)));
         setSplitPoints(parsed.splits ?? []);
-        setClipSequence(Array.isArray(parsed.sequence) ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start) : []);
-        setSelectedSequenceIndex(Number.isInteger(parsed.selectedSequenceIndex) && parsed.selectedSequenceIndex! >= 0 && parsed.selectedSequenceIndex! < (parsed.sequence?.length ?? 0) ? parsed.selectedSequenceIndex! : null);
+        const restoredSequence = Array.isArray(parsed.sequence)
+          ? parsed.sequence.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.start >= 0 && item.end > item.start)
+          : [];
+        setClipSequence(restoredSequence);
+        setSelectedSequenceIndex(Number.isInteger(parsed.selectedSequenceIndex) && parsed.selectedSequenceIndex! >= 0 && parsed.selectedSequenceIndex! < restoredSequence.length ? parsed.selectedSequenceIndex! : null);
         setCropZoom(Math.max(1, Math.min(3, parsed.cropZoom ?? 1)));
         setCropX(Math.max(0, Math.min(1, parsed.cropX ?? 0.5)));
         setCropY(Math.max(0, Math.min(1, parsed.cropY ?? 0.5)));
