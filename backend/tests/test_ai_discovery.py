@@ -254,3 +254,24 @@ def test_normalize_candidate_returns_boundary_quality_metadata():
     assert candidate["opening_boundary"]
     assert candidate["ending_boundary"]
     assert candidate["context_note"]
+
+def test_boundary_refinement_uses_full_transcript_context_at_chunk_edges():
+    from app.main import normalize_candidate
+
+    context = [
+        {"start": 0.0, "end": 10.0, "text": "Kalimat konteks yang selesai."},
+        {"start": 10.0, "end": 20.0, "text": "Dan inilah pembahasan yang menjadi inti."},
+        {"start": 20.0, "end": 30.0, "text": "Kesimpulan akhirnya cukup jelas."},
+        {"start": 30.0, "end": 40.0, "text": "Ada satu tambahan."},
+    ]
+    chunk = context[1:]
+    raw = {
+        "start_seconds": 11, "end_seconds": 29,
+        "title": "Kandidat chunk", "hook": "Awal yang jelas",
+        "summary": "Ringkasan.", "rationale": "Konteks utuh.",
+        "score": 80, "category": "education",
+    }
+    candidate = normalize_candidate(raw, chunk, 15, 30, context_segments=context)
+    assert candidate is not None
+    assert candidate["start_seconds"] == 10
+    assert "awal transkrip" not in candidate["opening_boundary"]
