@@ -71,7 +71,7 @@ def _test_gemini_key(api_key: str, model: str) -> dict[str, Any]:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 return {"success": False, "status": "invalid_response", "message": "Respons Gemini tidak valid."}
             if isinstance(payload, dict) and isinstance(payload.get("name"), str):
-                return {"success": True, "status": "connected", "message": "API key valid dan model dapat diakses."}
+                return {"success": True, "status": "connected", "message": "API key diterima; metadata model dapat diakses."}
             return {"success": False, "status": "invalid_response", "message": "Format respons Gemini tidak dikenali."}
         if response.status in (400, 401, 403):
             return {"success": False, "status": "authentication_failed", "message": "API key ditolak atau tidak memiliki izin untuk model ini."}
