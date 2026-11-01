@@ -867,32 +867,48 @@ function App() {
                         </div>
                       </div>
                       <div className="multitrack-row">
-                        <div className="multitrack-label"><b>AUDIO</b><small>Linked source</small></div>
+                        <div className="multitrack-label"><b>AUDIO</b><small>Per-clip gain</small></div>
                         <div className="multitrack-lane audio-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
                           {timelineClips.map((clip,index)=>{
                             const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
-                            return <div key={"audio-"+index} className="multitrack-clip audio-clip" style={{left:(offset/timelineTotalDuration*100)+"%",width:((clip.end-clip.start)/timelineTotalDuration*100)+"%"}} onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(clip.start);}}>
-                              <span className="audio-linked-label">SOURCE AUDIO · LINKED</span>
+                            const volume=Math.round((clip.audio_volume ?? 1)*100);
+                            return <div key={"audio-"+index} className={"multitrack-clip audio-clip"+(timelineSelectedIndex===index?" selected":"")} style={{left:(offset/timelineTotalDuration*100)+"%",width:((clip.end-clip.start)/timelineTotalDuration*100)+"%"}} onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(clip.start);}}>
+                              <span className="audio-linked-label">{volume===0?"MUTED":"VOL "+volume+"%"}</span>
                             </div>;
                           })}
                         </div>
                       </div>
+                      {timelineSelectedIndex !== null && <div className="timeline-audio-controls">
+                        <strong>Audio · Clip {timelineSelectedIndex+1}</strong>
+                        <button type="button" className="secondary-button audio-mute-button" onClick={()=>updateSelectedAudioVolume(audioVolume===0?1:0)}>{audioVolume===0?"Unmute":"Mute"}</button>
+                        <label><span>Volume</span><input type="range" min="0" max="200" step="5" value={Math.round(audioVolume*100)} onChange={event=>updateSelectedAudioVolume(Number(event.target.value)/100)}/><output>{Math.round(audioVolume*100)}%</output></label>
+                      </div>}
                       <div className="multitrack-row">
                         <div className="multitrack-label"><b>CAPTIONS</b><small>Transcript</small></div>
                         <div className="multitrack-lane captions-lane" onClick={event=>seekTimelineOutput(event.clientX,event.currentTarget)}>
                           {timelineClips.flatMap((clip,index)=>{
                             const offset=timelineClips.slice(0,index).reduce((sum,item)=>sum+item.end-item.start,0);
                             return timelineTranscriptSegments.flatMap((segment,sourceSegmentIndex)=>{
-                              if(segment.end<=clip.start||segment.start>=clip.end) return [];
-                              const start=Math.max(segment.start,clip.start);
-                              const end=Math.min(segment.end,clip.end);
+                              const timing=getSubtitleRange(sourceSegmentIndex,segment);
+                              if(timing.end<=clip.start||timing.start>=clip.end) return [];
+                              const start=Math.max(timing.start,clip.start);
+                              const end=Math.min(timing.end,clip.end);
                               const captionText=subtitleText[sourceSegmentIndex] ?? segment.text;
+                              const dragProps={
+                                onPointerMove:moveCaptionTiming,
+                                onPointerUp:endCaptionTiming,
+                                onPointerCancel:endCaptionTiming,
+                              };
                               return [<button type="button" key={"caption-"+index+"-"+sourceSegmentIndex}
                                 className="timeline-caption-clip"
                                 style={{left:((offset+start-clip.start)/timelineTotalDuration*100)+"%",width:((end-start)/timelineTotalDuration*100)+"%"}}
                                 title={captionText}
+                                onPointerDown={event=>beginCaptionTiming(event,sourceSegmentIndex,"move")}
+                                {...dragProps}
                                 onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index,false);seekPreview(start);}}>
-                                {captionText}
+                                <span className="caption-trim-handle left" title="Trim caption start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginCaptionTiming(event,sourceSegmentIndex,"start")} {...dragProps}/>
+                                <span className="caption-block-text">{captionText}</span>
+                                <span className="caption-trim-handle right" title="Trim caption end" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginCaptionTiming(event,sourceSegmentIndex,"end")} {...dragProps}/>
                               </button>];
                             });
                           })}
@@ -950,7 +966,7 @@ function App() {
                   <label><span>Opasitas background <output>{subtitleBackground}%</output></span><input type="range" min="0" max="90" step="5" value={subtitleBackground} onChange={e=>setSubtitleBackground(Number(e.target.value))}/></label>
                 </div>
                 <div className={"subtitle-sample " + subtitlePreset} style={{alignItems:"end",paddingBottom:String(subtitlePosition)+"%"}}><span style={{fontSize:String(Math.max(12,Math.round(subtitleFontSize*0.36)))+"px",WebkitTextStroke:String(Math.min(2,subtitleOutline*0.25))+"px #000",backgroundColor:subtitleBackground?"rgba(0,0,0,"+(subtitleBackground/100)+")":(subtitlePreset==="highlight"?undefined:"transparent"),padding:subtitleBackground?"5px 9px":undefined}}>{visibleSubtitleSegments.length ? (subtitleText[transcription.segments.indexOf(visibleSubtitleSegments[0])] ?? visibleSubtitleSegments[0].text) : "Preview subtitle"}</span></div>
-                <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=transcription.segments!.indexOf(segment);return <div className="subtitle-row" key={segment.start + "-" + index}><button className="subtitle-time" onClick={()=>seekPreview(segment.start)}>{formatTimestamp(segment.start)}</button><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(segment.start)}/></div>})}</div>
+                <div className="subtitle-list">{visibleSubtitleSegments.map(segment=>{const index=timelineTranscriptSegments.indexOf(segment);const timing=getSubtitleRange(index,segment);return <div className="subtitle-row" key={index}><div className="subtitle-timing-fields"><button className="subtitle-time" onClick={()=>seekPreview(timing.start)}>{formatTimestamp(timing.start)}</button><label><span>IN</span><input type="number" min="0" max={timing.end-0.05} step="0.05" value={Number(timing.start.toFixed(2))} onChange={event=>updateSubtitleRange(index,"start",Number(event.target.value))}/></label><label><span>OUT</span><input type="number" min={timing.start+0.05} max={editorSourceDuration || undefined} step="0.05" value={Number(timing.end.toFixed(2))} onChange={event=>updateSubtitleRange(index,"end",Number(event.target.value))}/></label></div><textarea rows={2} value={subtitleText[index] ?? segment.text} onChange={e=>setSubtitleText(previous=>({...previous,[index]:e.target.value}))} aria-label={"Subtitle at " + formatTimestamp(timing.start)}/></div>})}</div>
                 <p className="editor-disclaimer">Subtitle yang dikoreksi dan preset akan ikut dirender saat opsi burn-in diaktifkan. Tanpa opsi tersebut, video diekspor tanpa subtitle tertanam.</p>
               </div>}
             </section>
