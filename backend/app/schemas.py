@@ -131,6 +131,7 @@ class ExportClipSegment(BaseModel):
     crop_zoom: float | None = Field(default=None, ge=1.0, le=3.0, allow_inf_nan=False)
     crop_x: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
     crop_y: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    audio_volume: float | None = Field(default=None, ge=0.0, le=2.0, allow_inf_nan=False)
 
 
 class ExportSubtitleStyle(BaseModel):
@@ -152,6 +153,7 @@ class ExportCreate(BaseModel):
     crop_zoom: float = Field(default=1.0, ge=1.0, le=3.0, allow_inf_nan=False)
     crop_x: float = Field(default=0.5, ge=0.0, le=1.0, allow_inf_nan=False)
     crop_y: float = Field(default=0.5, ge=0.0, le=1.0, allow_inf_nan=False)
+    audio_volume: float = Field(default=1.0, ge=0.0, le=2.0, allow_inf_nan=False)
 
 
 class ExportResponse(BaseModel):
