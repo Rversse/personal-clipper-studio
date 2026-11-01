@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from fastapi.testclient import TestClient
+
 from app import diagnostics
+from app.main import app
 
 
 def _mock_base(monkeypatch):
@@ -179,3 +182,34 @@ def test_ollama_diagnostics_rejects_malformed_endpoint_port(monkeypatch):
 
     assert "host" not in state
     assert result["ai"]["ollama_connection"] == "not_tested_unsafe_endpoint"
+
+
+
+def test_diagnostics_endpoint_reports_selected_whisper_model(monkeypatch):
+    monkeypatch.setattr(
+        diagnostics.transcription,
+        "whisper_model_preflight",
+        lambda model: {
+            "model": model,
+            "downloaded": False,
+            "cache_configured": False,
+            "free_bytes": 2 * 1024**3,
+            "estimated_download_bytes": 484 * 1024**2,
+            "required_free_bytes": 996 * 1024**2,
+            "disk_space_ok": True,
+            "disk_space_known": True,
+        },
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/diagnostics?whisper_model=small")
+
+    assert response.status_code == 200
+    assert response.json()["transcription"]["model_preflight"]["model"] == "small"
+    assert response.json()["transcription"]["model_preflight"]["disk_space_ok"] is True
+
+
+def test_diagnostics_endpoint_rejects_unknown_whisper_model():
+    with TestClient(app) as client:
+        response = client.get("/api/diagnostics?whisper_model=unknown")
+
+    assert response.status_code == 422
