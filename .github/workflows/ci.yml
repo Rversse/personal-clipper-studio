@@ -31,9 +31,12 @@ jobs:
   backend:
     name: Backend import and health check
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           persist-credentials: false
       - name: Install FFmpeg for audio analysis smoke tests
         run: |
@@ -42,6 +45,13 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+      - name: Set up Rust for Cargo lockfile generation
+        uses: dtolnay/rust-toolchain@stable
+      - name: Generate Python and Rust dependency lockfiles
+        run: |
+          python -m pip install "uv==0.13.6"
+          uv lock --project backend
+          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
         working-directory: backend
@@ -58,3 +68,18 @@ jobs:
       - name: Verify API imports
         run: python -c "from app.main import app; print(app.title)"
         working-directory: backend
+      - name: Commit Python and Rust lockfiles to the hardening branch
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'security/stage-1-hardening'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/uv.lock src-tauri/Cargo.lock
+          if git diff --cached --quiet; then
+            echo "No Python or Rust lockfile changes to commit."
+            exit 0
+          fi
+          git commit -m "build: add reproducible Python and Rust lockfiles"
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth_header" push origin "HEAD:${{ github.event.pull_request.head.ref }}"
