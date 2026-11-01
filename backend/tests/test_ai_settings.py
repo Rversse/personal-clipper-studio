@@ -233,3 +233,21 @@ def test_gemini_test_rejects_cross_origin_browser_request(monkeypatch):
     assert response.status_code == 403
     assert called == []
     assert "attacker.example" not in response.text
+
+
+
+def test_gemini_test_accepts_tauri_origin(monkeypatch):
+    monkeypatch.setattr(credentials, "get_gemini_api_key", lambda: "test-key")
+    monkeypatch.setattr(
+        ai_settings,
+        "_test_gemini_key",
+        lambda *_args: {"success": True, "status": "connected", "message": "ok"},
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/settings/ai/gemini-test",
+            headers={"Origin": "http://tauri.localhost"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
