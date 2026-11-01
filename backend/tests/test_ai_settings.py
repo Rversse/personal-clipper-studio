@@ -218,3 +218,18 @@ def test_gemini_key_request_rejects_non_string_without_echoing_payload():
 
     assert response.status_code == 422
     assert secret not in response.text
+
+
+
+def test_gemini_test_rejects_cross_origin_browser_request(monkeypatch):
+    called = []
+    monkeypatch.setattr(credentials, "get_gemini_api_key", lambda: called.append(True))
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/settings/ai/gemini-test",
+            headers={"Origin": "https://attacker.example"},
+        )
+
+    assert response.status_code == 403
+    assert called == []
+    assert "attacker.example" not in response.text
