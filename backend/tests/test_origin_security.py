@@ -144,6 +144,7 @@ def test_health_check_remains_available_for_startup_probe(client, monkeypatch):
 def test_desktop_session_token_requires_uuid_v4(monkeypatch):
     from app import main as main_module
 
+    monkeypatch.setattr(main_module, "_API_SESSION_TOKEN", None)
     with pytest.raises(ValueError):
         main_module.configure_session_token("predictable-token")
 
