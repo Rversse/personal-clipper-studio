@@ -39,7 +39,11 @@ The System Check is diagnostic only and does not install software. It does not t
 
 ## AI providers and GPU
 
-Gemini requires a user-supplied `PCS_GEMINI_API_KEY` in the environment inherited by the desktop app. Ollama must be installed and running locally when selected.
+Gemini API keys can be entered from **Settings → Gemini API configuration**. On Windows, the app stores the key in the current user's Windows Credential Manager using the Windows Vault backend; the key is not written to the SQLite database, application settings files, or logs. The UI only receives whether a key is configured and its source, never the key value. Replacing or deleting a key is supported from the same panel.
+
+The **Test connection** action sends a read-only HTTPS request to Google's Gemini model metadata endpoint using the key in the `x-goog-api-key` request header. It verifies that the selected model is accessible without sending a prompt or consuming generation tokens. The key is not placed in the URL. If `PCS_GEMINI_API_KEY` is set in the process environment, it takes precedence over the stored key and the UI marks it as environment-managed; update that environment variable to change it. The environment-variable path remains supported for development and managed deployments.
+
+Windows Credential Manager is an at-rest protection for the current Windows user account, not a defense against malware or another process already running as that same user. Ollama must be installed and running locally when selected.
 
 The bundled transcription engine is the CPU build. CUDA/cuDNN is not bundled. NVENC availability depends on the locally installed FFmpeg build, NVIDIA hardware, and compatible drivers; CPU H.264 remains the fallback when supported by FFmpeg.
 
