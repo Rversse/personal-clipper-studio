@@ -111,8 +111,11 @@ async def lifespan(_: FastAPI):
     yield
     _EXPORT_WORKER_STOP.set()
     _EXPORT_WORKER_WAKE.set()
+    # Stop FFmpeg/FFprobe work before waiting for the worker to exit. This keeps
+    # the desktop shutdown path from leaving orphaned encoder processes behind.
+    rendering.cancel_all_controls()
     if _EXPORT_WORKER_THREAD is not None:
-        _EXPORT_WORKER_THREAD.join(timeout=5)
+        _EXPORT_WORKER_THREAD.join(timeout=10)
 
 
 app = FastAPI(
@@ -948,6 +951,10 @@ def export_payload(job_id: str) -> dict:
 
 def run_export_job(job_id: str, source_path: str, destination_path: str) -> None:
     control = rendering.register_control(job_id)
+    # Close the race where shutdown begins after the worker dequeues a job but
+    # before its render control is visible to cancel_all_controls().
+    if _EXPORT_WORKER_STOP.is_set():
+        control.cancel()
 
     def update_progress(value: float) -> None:
         with get_connection() as connection:
