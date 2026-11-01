@@ -37,7 +37,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
+        working-directory: backend
+      - name: Audit installed Python dependencies for known vulnerabilities
+        run: |
+          python -m pip install "pip-audit==2.10.1"
+          pip-audit --local
         working-directory: backend
       - name: Run backend tests
         run: pytest -q
