@@ -425,10 +425,19 @@ async def start_transcription(
             status_code=503,
             detail="Whisper belum terpasang. Install dengan: pip install -e \"backend[transcription]\"",
         )
-    source_path, _ = media_file(asset_id)
     job_id = str(uuid.uuid4())
     timestamp = now_iso()
     with get_connection() as connection:
+        # Serialize with media deletion so a stale file lookup cannot queue an orphan job.
+        connection.execute("BEGIN IMMEDIATE")
+        media = connection.execute(
+            "SELECT stored_name FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        if media is None:
+            raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
+        source_path = MEDIA_DIR / media["stored_name"]
+        if not source_path.is_file():
+            raise HTTPException(status_code=404, detail="File media tidak ditemukan di penyimpanan.")
         connection.execute(
             """INSERT INTO transcription_jobs(
                 id,media_id,status,model_name,language,created_at,updated_at
@@ -754,7 +763,11 @@ async def start_discovery(
     except ai_discovery.DiscoveryProviderError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
+    job_id = str(uuid.uuid4())
+    timestamp = now_iso()
     with get_connection() as connection:
+        # Claim the write transaction before validating references and inserting the job.
+        connection.execute("BEGIN IMMEDIATE")
         media = connection.execute(
             "SELECT id FROM media_assets WHERE id=?", (asset_id,)
         ).fetchone()
@@ -765,16 +778,12 @@ async def start_discovery(
                WHERE id=? AND media_id=?""",
             (payload.transcription_id, asset_id),
         ).fetchone()
-    if transcript is None:
-        raise HTTPException(status_code=404, detail="Transkrip untuk video ini tidak ditemukan.")
-    if transcript["status"] != "completed":
-        raise HTTPException(
-            status_code=409, detail="Transkripsi harus selesai sebelum analisis AI dimulai."
-        )
-
-    job_id = str(uuid.uuid4())
-    timestamp = now_iso()
-    with get_connection() as connection:
+        if transcript is None:
+            raise HTTPException(status_code=404, detail="Transkrip untuk video ini tidak ditemukan.")
+        if transcript["status"] != "completed":
+            raise HTTPException(
+                status_code=409, detail="Transkripsi harus selesai sebelum analisis AI dimulai."
+            )
         connection.execute(
             """INSERT INTO discovery_jobs(
                 id,media_id,transcription_id,status,provider,model_name,mode,category,
@@ -1126,6 +1135,13 @@ async def start_export(
         "normalize_audio": payload.normalize_audio,
     })
     with get_connection() as connection:
+        # Serialize the final media check and queue insert with media deletion.
+        connection.execute("BEGIN IMMEDIATE")
+        current_media = connection.execute(
+            "SELECT 1 FROM media_assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        if current_media is None:
+            raise HTTPException(status_code=404, detail="Media tidak ditemukan.")
         connection.execute(
             """INSERT INTO export_jobs(
                 id,media_id,status,start_seconds,end_seconds,aspect_ratio,output_name,
