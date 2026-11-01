@@ -52,7 +52,7 @@
 - [x] Persistent export job records, status endpoint, history, and completed-file download
 - [x] Live FFmpeg progress streamed into persistent export job status
 - [x] Persistent single-worker queue for multiple export jobs, serial execution, queued/active cancellation, subprocess termination, and temporary-file cleanup
-- [ ] Automatic resumption of interrupted active renders after a crash
+- [x] Automatic recovery of interrupted renders: restart incomplete jobs from persisted settings, preserve atomically completed MP4 outputs, and clean job-scoped temporary artifacts
 - [x] Burned-in subtitle rendering with Clean, Bold, and Highlight presets
 - [x] Platform export profiles for YouTube Shorts, Instagram Reels, Facebook Reels, Square Feed, Landscape, and Custom
 - [x] Balanced / High / Maximum CPU and NVENC quality profiles with configurable source / 24 / 30 / 60 FPS
