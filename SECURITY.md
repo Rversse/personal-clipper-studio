@@ -27,7 +27,7 @@ Areas of particular interest include:
 - Tauri command permissions and frontend/backend boundaries.
 - Dependency and build pipeline integrity.
 
-The local API is intended to bind to loopback and serve the local desktop application. It is not designed to be exposed directly to the public internet.
+The local API is intended to bind to loopback and serve the local desktop application. It is not designed to be exposed directly to the public internet. Browser-originated requests are restricted to the desktop UI and the explicit development UI origins; requests carrying an untrusted or opaque Origin are rejected. Local native clients that omit the Origin header remain supported. This origin check is a browser CSRF boundary, not authentication, and does not make the API safe to expose beyond loopback.
 
 ## Coordinated disclosure
 
