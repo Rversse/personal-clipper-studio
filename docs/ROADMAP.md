@@ -35,7 +35,9 @@
 - [x] Source timeline ruler, live playhead, selected-range and split-point visualization, plus clickable sequence strip
 - [x] Visual Video / linked Audio / transcript Captions timeline with shared output-time ruler
 - [x] Timeline clip selection, drag reorder, edge trim, playhead seeking, split, and synchronized export sequence
-- [ ] Independent audio-track mixing/editing and direct caption timing edits
+- [x] Per-clip audio gain and mute controls persisted in the sequence and applied by FFmpeg
+- [x] Direct caption move/trim on the timeline, precise IN/OUT controls, local draft persistence, and burn-in timestamp propagation
+- [ ] Separate audio sources, audio fades, and full independent audio-track assembly
 - [ ] Safe context-aware clip boundaries
 
 ## Phase 5 — rendering and delivery (partial)
