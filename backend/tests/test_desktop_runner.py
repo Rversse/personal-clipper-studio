@@ -77,3 +77,28 @@ def test_shutdown_watcher_does_not_shutdown_on_eof_or_unrelated_input():
 def test_runner_rejects_invalid_ports(value):
     with pytest.raises(SystemExit):
         main(["--port", value])
+
+
+
+def test_runner_self_check_imports_packaged_transcription_dependencies(monkeypatch, capsys):
+    fake_modules = {
+        "av": SimpleNamespace(__version__="test-av"),
+        "ctranslate2": SimpleNamespace(__version__="test-ctranslate2"),
+        "tokenizers": SimpleNamespace(__version__="test-tokenizers"),
+        "faster_whisper": SimpleNamespace(
+            __version__="test-faster-whisper",
+            WhisperModel=object,
+        ),
+    }
+    for name, module in fake_modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setitem(sys.modules, "uvicorn", None)
+
+    main(["--self-check-runtime"])
+
+    output = capsys.readouterr().out
+    assert "Packaged transcription runtime imports passed" in output
+    assert "test-faster-whisper" in output
+    assert "test-ctranslate2" in output
+    assert "test-av" in output
+    assert "test-tokenizers" in output

@@ -59,6 +59,32 @@ def main() -> int:
     if not executable.is_file():
         raise SystemExit(f"Packaged backend executable not found: {executable}")
 
+    try:
+        runtime_check = subprocess.run(
+            [str(executable), "--self-check-runtime"],
+            cwd=executable.parent,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TimeoutError(
+            "Packaged transcription runtime imports did not finish within 60 seconds."
+        ) from error
+    if runtime_check.returncode != 0:
+        raise RuntimeError(
+            "Packaged transcription runtime import check failed. "
+            f"stdout: {runtime_check.stdout} stderr: {runtime_check.stderr}"
+        )
+    if "Packaged transcription runtime imports passed" not in runtime_check.stdout:
+        raise RuntimeError(
+            "Packaged backend did not report a successful transcription runtime check. "
+            f"stdout: {runtime_check.stdout} stderr: {runtime_check.stderr}"
+        )
+
     port = _free_loopback_port()
     with tempfile.TemporaryDirectory(prefix="pcs-backend-smoke-") as temporary:
         work_dir = Path(temporary)

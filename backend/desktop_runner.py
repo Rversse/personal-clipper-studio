@@ -34,7 +34,34 @@ def _watch_shutdown(server, input_stream: TextIO | None = None) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Personal Clipper Studio local API")
     parser.add_argument("--port", type=_port, default=8765)
+    parser.add_argument(
+        "--self-check-runtime",
+        action="store_true",
+        help="Import-check the bundled CPU transcription dependencies, then exit.",
+    )
     arguments = parser.parse_args(argv)
+
+    if arguments.self_check_runtime:
+        try:
+            import av
+            import ctranslate2
+            import tokenizers
+            import faster_whisper
+            from faster_whisper import WhisperModel  # noqa: F401
+        except (ImportError, OSError) as error:
+            raise SystemExit(
+                f"Packaged transcription runtime is incomplete: {error}"
+            ) from error
+
+        print(
+            "Packaged transcription runtime imports passed: "
+            f"faster-whisper={getattr(faster_whisper, '__version__', 'unknown')}, "
+            f"ctranslate2={getattr(ctranslate2, '__version__', 'unknown')}, "
+            f"av={getattr(av, '__version__', 'unknown')}, "
+            f"tokenizers={getattr(tokenizers, '__version__', 'unknown')}",
+            flush=True,
+        )
+        return
 
     import uvicorn
 

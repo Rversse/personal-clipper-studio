@@ -40,7 +40,7 @@ Debug builds intentionally do not start the backend automatically. Run the local
 
 ## Windows installers
 
-The Windows desktop workflow builds both unsigned NSIS (`.exe`) and MSI installers. It packages the FastAPI service as a Windows executable with the CPU `faster-whisper` runtime, runs that executable against `/api/health`, then builds the Tauri installers.
+The Windows desktop workflow builds both unsigned NSIS (`.exe`) and MSI installers. It packages the FastAPI service as a Windows executable with the CPU `faster-whisper` runtime, import-checks its native transcription dependencies, runs that executable against `/api/health`, then builds the Tauri installers.
 
 1. Open the repository's **Actions → Windows desktop build** workflow.
 2. Run it with **workflow_dispatch**, or push a change to a pull request targeting `main`.

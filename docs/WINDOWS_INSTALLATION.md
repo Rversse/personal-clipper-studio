@@ -37,4 +37,4 @@ The bundled transcription engine is the CPU build. CUDA/cuDNN is not bundled. NV
 
 ## CI smoke-test scope
 
-The Windows workflow builds the backend directory on Windows, starts its executable on a temporary loopback port, verifies health, creates and lists a test project in SQLite, and checks clean process termination before creating NSIS and MSI packages. This validates the packaged backend and installer build steps; it is not a substitute for installing and exercising both installers on a separate clean Windows machine.
+The Windows workflow builds the backend directory on Windows, runs an import check for the bundled faster-whisper, CTranslate2, PyAV, and tokenizers runtime, starts the executable on a temporary loopback port, verifies health, creates and lists a test project in SQLite, and checks clean process termination before creating NSIS and MSI packages. This validates the packaged backend and installer build steps; it is not a substitute for installing and exercising both installers on a separate clean Windows machine.
