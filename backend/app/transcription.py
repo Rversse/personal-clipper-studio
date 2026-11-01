@@ -57,9 +57,7 @@ def whisper_model_preflight(model_name: str) -> dict[str, Any]:
     free_bytes = _available_disk_bytes(cache_dir)
     estimated_model_bytes = WHISPER_MODELS[model_name]
     required_bytes = 0 if downloaded else estimated_model_bytes + WHISPER_DISK_RESERVE_BYTES
-    enough_space = True if downloaded else (
-        free_bytes is not None and free_bytes >= required_bytes
-    )
+    enough_space = True if downloaded or free_bytes is None else free_bytes >= required_bytes
     return {
         "model": model_name,
         "downloaded": downloaded,
