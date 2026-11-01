@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app import ai_discovery, database, main as main_module
