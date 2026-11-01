@@ -285,6 +285,31 @@ function App() {
     if (project) void loadMedia(project);
   }, [active, aiProjectId, projects, loadMedia]);
 
+
+  async function cancelTranscription() {
+    if (!transcription) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/transcriptions/${transcription.id}/cancel`, { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Gagal membatalkan transkripsi.");
+      setTranscription(previous => previous ? { ...previous, ...body } : body as Transcription);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal membatalkan transkripsi.");
+    }
+  }
+
+  async function cancelDiscovery() {
+    if (!discovery) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/discovery/${discovery.id}/cancel`, { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Gagal membatalkan AI discovery.");
+      setDiscovery(body as Discovery);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal membatalkan AI discovery.");
+    }
+  }
+
   useEffect(() => {
     if (!aiMediaId) return;
     setTranscription(null);
@@ -1065,10 +1090,10 @@ function App() {
                   <div className="ai-control-grid">
                     <label>Whisper model<select value={whisperModel} onChange={e=>setWhisperModel(e.target.value)}><option value="tiny">Tiny · paling cepat</option><option value="base">Base · ringan</option><option value="small">Small · balanced</option><option value="medium">Medium · lebih akurat</option><option value="large-v3">Large v3 · paling berat</option><option value="distil-large-v3">Distil Large v3</option></select></label>
                     <label>Bahasa audio<select value={whisperLanguage} onChange={e=>setWhisperLanguage(e.target.value)}><option value="id">Indonesia</option><option value="en">English</option><option value="">Auto detect</option></select></label>
-                    <button className="primary-button ai-action" onClick={()=>void startTranscription()} disabled={aiBusy || !!transcription && ["queued","processing"].includes(transcription.status)}><AudioLines size={15}/>{transcription?.status==="processing" || transcription?.status==="queued" ? "Transcribing..." : "Start transcription"}</button>
+                    <button className="primary-button ai-action" onClick={()=>void startTranscription()} disabled={aiBusy || !!transcription && ["queued","processing"].includes(transcription.status)}><AudioLines size={15}/>{transcription?.status==="processing" || transcription?.status==="queued" ? "Transcribing..." : ["failed","cancelled"].includes(transcription?.status ?? "") ? "Retry transcription" : "Start transcription"}</button>
                   </div>
                   {runtimeDiagnostics?.transcription.model_preflight.model === whisperModel && <div className="whisper-preflight-note"><strong>{runtimeDiagnostics.transcription.model_preflight.downloaded ? "Model sudah tersedia di cache lokal." : runtimeDiagnostics.transcription.model_preflight.disk_space_known ? (runtimeDiagnostics.transcription.model_preflight.disk_space_ok ? "Ruang disk cukup untuk mengunduh model." : "Ruang disk tidak mencukupi untuk model ini.") : "Ruang disk belum dapat diperiksa."}</strong><span>{runtimeDiagnostics.transcription.model_preflight.downloaded ? "Tidak perlu mengunduh ulang model." : "Estimasi unduhan: " + (runtimeDiagnostics.transcription.model_preflight.estimated_download_bytes / 1024**2).toFixed(0) + " MB · ruang kosong: " + (runtimeDiagnostics.transcription.model_preflight.free_bytes === null ? "tidak diketahui" : (runtimeDiagnostics.transcription.model_preflight.free_bytes / 1024**3).toFixed(2) + " GB")}</span></div>}
-                  {transcription && <div className="job-status"><div className="job-status-top"><strong>{transcription.status==="completed" ? "Transcription completed" : transcription.status==="failed" ? "Transcription failed" : "Transcription in progress"}</strong><span>{Math.round((transcription.progress ?? 0)*100)}%</span></div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,(transcription.progress ?? 0)*100))}%`}}/></div>{transcription.status==="completed" && <small>{transcription.detected_language?.toUpperCase() ?? "Language detected"} · {transcription.segments?.length ?? 0} transcript segments</small>}{transcription.status==="failed" && <small className="job-error">{transcription.error ?? "Proses transkripsi gagal."}</small>}</div>}
+                  {transcription && <div className="job-status"><div className="job-status-top"><strong>{transcription.status==="completed" ? "Transcription completed" : transcription.status==="failed" ? "Transcription failed" : transcription.status==="cancelled" ? "Transcription cancelled" : "Transcription in progress"}</strong><span>{Math.round((transcription.progress ?? 0)*100)}%</span>{["queued","processing"].includes(transcription.status) && <button className="subtle-button" onClick={()=>void cancelTranscription()}><X size={13}/> Cancel</button>}</div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,(transcription.progress ?? 0)*100))}%`}}/></div>{transcription.status==="completed" && <small>{transcription.detected_language?.toUpperCase() ?? "Language detected"} · {transcription.segments?.length ?? 0} transcript segments</small>}{["failed","cancelled"].includes(transcription.status) && <small className="job-error">{transcription.error ?? "Proses transkripsi gagal."}</small>}</div>}
                 </div>
                 {transcription?.status==="completed" && <div className="ai-panel">
                   <div className="ai-panel-heading"><div><span className="ai-step">02</span><div><h3>AI Clip Discovery</h3><p>Analisis transkrip dan temukan momen yang layak dipotong.</p></div></div><span className="ai-local-tag">TRANSCRIPT ONLY</span></div>
@@ -1077,10 +1102,10 @@ function App() {
                     {discoveryMode==="category" && <label>Category<select value={discoveryCategory} onChange={e=>setDiscoveryCategory(e.target.value)}><option value="podcast">Podcast</option><option value="gaming">Gaming</option><option value="education">Education</option><option value="motivation">Motivation</option><option value="comedy">Comedy</option><option value="news">News</option><option value="storytelling">Storytelling</option><option value="custom">Custom</option></select></label>}
                     <label>Minimum duration<select value={minDuration} onChange={e=>setMinDuration(Number(e.target.value))}><option value={15}>15 seconds</option><option value={30}>30 seconds</option><option value={45}>45 seconds</option><option value={60}>60 seconds</option><option value={90}>90 seconds</option></select></label>
                     <label>Maximum duration<select value={maxDuration} onChange={e=>setMaxDuration(Number(e.target.value))}><option value={30}>30 seconds</option><option value={60}>60 seconds</option><option value={90}>90 seconds</option><option value={120}>120 seconds</option><option value={180}>180 seconds</option></select></label>
-                    <button className="primary-button ai-action" onClick={()=>void startDiscovery()} disabled={aiBusy || minDuration>maxDuration || !!discovery && ["queued","processing"].includes(discovery.status)}><Sparkles size={15}/>{discovery?.status==="processing" || discovery?.status==="queued" ? "Analyzing..." : "Find clip moments"}</button>
+                    <button className="primary-button ai-action" onClick={()=>void startDiscovery()} disabled={aiBusy || minDuration>maxDuration || !!discovery && ["queued","processing"].includes(discovery.status)}><Sparkles size={15}/>{discovery?.status==="processing" || discovery?.status==="queued" ? "Analyzing..." : ["failed","cancelled"].includes(discovery?.status ?? "") ? "Retry analysis" : "Find clip moments"}</button>
                   </div>
                   {minDuration>maxDuration && <small className="job-error">Durasi minimum tidak boleh melebihi durasi maksimum.</small>}
-                  {discovery && <div className="job-status"><div className="job-status-top"><strong>{discovery.status==="completed" ? "Analysis completed" : discovery.status==="failed" ? "Analysis failed" : "Analyzing transcript"}</strong><span>{Math.round(discovery.progress*100)}%</span></div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,discovery.progress*100))}%`}}/></div>{discovery.status==="failed" && <small className="job-error">{discovery.error ?? "Analisis AI gagal."}</small>}</div>}
+                  {discovery && <div className="job-status"><div className="job-status-top"><strong>{discovery.status==="completed" ? "Analysis completed" : discovery.status==="failed" ? "Analysis failed" : discovery.status==="cancelled" ? "Analysis cancelled" : "Analyzing transcript"}</strong><span>{Math.round(discovery.progress*100)}%</span>{["queued","processing"].includes(discovery.status) && <button className="subtle-button" onClick={()=>void cancelDiscovery()}><X size={13}/> Cancel</button>}</div><div className="progress-track"><i style={{width:`${Math.max(0,Math.min(100,discovery.progress*100))}%`}}/></div>{["failed","cancelled"].includes(discovery.status) && <small className="job-error">{discovery.error ?? "Analisis AI gagal."}</small>}</div>}
                   {discovery?.status==="completed" && <div className="candidate-section"><div className="media-heading"><div><h3>Clip candidates</h3><p>{discovery.candidates.length} kandidat ditemukan · urut berdasarkan skor</p></div></div>{discovery.candidates.length ? <div className="candidate-list">{discovery.candidates.map(candidate=><article className="candidate-card" key={candidate.id}><div className="candidate-top"><span>{formatTimestamp(candidate.start_seconds)} — {formatTimestamp(candidate.end_seconds)}</span><strong>{candidate.score}<small>/100</small></strong></div><h4>{candidate.title}</h4><p className="candidate-hook">{candidate.hook}</p><p>{candidate.summary}</p><small>{candidate.rationale}</small><div className="candidate-boundary-quality"><span>Boundary quality</span><strong>{candidate.boundary_quality ?? 50}/100</strong></div><div className="candidate-boundary-notes"><span><b>OPEN</b> {candidate.opening_boundary ?? "Batas segmen transkrip"}</span><span><b>CLOSE</b> {candidate.ending_boundary ?? "Batas segmen transkrip"}</span></div><small className="candidate-context-note">{candidate.context_note ?? "Batas klip diselaraskan dengan segmen transkrip."}</small><div className="candidate-meta"><span>{candidate.category}</span><span>{Math.round(candidate.end_seconds-candidate.start_seconds)} sec</span></div></article>)}</div> : <div className="empty-panel ai-empty"><strong>Belum ada kandidat yang memenuhi kriteria</strong><p>Coba mode analisis lain atau rentang durasi berbeda.</p></div>}</div>}
                 </div>}
                 <p className="ai-provider-note">Provider AI dikonfigurasi di backend. Gemini mengirim teks transkrip saja dengan penyimpanan interaksi dinonaktifkan; Ollama dapat berjalan sepenuhnya lokal.</p>
