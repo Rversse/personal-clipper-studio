@@ -243,7 +243,7 @@ def test_gemini_test_accepts_tauri_origin(monkeypatch):
         "_test_gemini_key",
         lambda *_args: {"success": True, "status": "connected", "message": "ok"},
     )
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         response = client.post(
             "/api/settings/ai/gemini-test",
             headers={"Origin": "http://tauri.localhost"},

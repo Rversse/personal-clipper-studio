@@ -14,3 +14,9 @@ ALLOWED_UI_ORIGINS = frozenset(
         "tauri://localhost",
     }
 )
+
+# Hostnames used by the desktop app and local development UI. The ASGI
+# test-client hostname is intentionally excluded from production validation:
+# requests without an Origin are native/local clients, while browser requests
+# in tests use the explicit loopback base URL.
+ALLOWED_API_HOSTS = frozenset({"127.0.0.1", "localhost"})
