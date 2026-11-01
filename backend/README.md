@@ -80,3 +80,11 @@ Install a recent FFmpeg build and make sure `ffmpeg` is available on PATH. The E
 - Optional EBU-style single-pass loudness normalization uses FFmpeg loudnorm at −16 LUFS integrated, −1.5 dBTP true peak, and 11 LU loudness range. Per-clip gain is applied before normalization. Audio normalization is optional and off by default.
 - Context-aware discovery boundary refinement snaps AI-proposed hooks and endings to valid Whisper word boundaries when available, with sentence-segment fallback. It scores punctuation, conjunctions, pauses, and sentence continuation while preserving the requested duration. When FFmpeg is available, optional audio analysis adds natural-silence and RMS-energy signals as small boundary-score adjustments; missing audio or FFmpeg failure falls back to transcript-only refinement. Each candidate persists a 0–100 boundary-quality score, opening/ending rationale, and context note. Pitch/F0 and speech-rate analysis are not implemented yet.
 - The export worker serializes queued jobs (one FFmpeg render at a time). Queued and active exports can be cancelled; cancellation terminates the active FFmpeg process and cleans partial output, intermediate segments, concat lists, and temporary subtitle files. Queued jobs remain persisted across restarts; an interrupted active render is marked failed on startup and is not automatically resumed.
+
+## Packaged Windows desktop runtime
+
+The Windows desktop workflow builds `desktop_runner.py` into `pcs-api.exe` with PyInstaller and includes the CPU `faster-whisper` runtime. Tauri starts this child service at `127.0.0.1:8765` in release builds and terminates it on normal application exit. The executable accepts only a port argument; its bind host is hard-coded to loopback.
+
+A packaged-backend smoke test starts the generated executable on a temporary port and verifies the JSON health response before the installer build proceeds. Debug builds still require a separately started API process.
+
+FFmpeg and FFprobe are not bundled. Install them separately and make sure both executables are on PATH before using media probing, audio analysis, thumbnails, or rendering. CUDA/cuDNN and NVENC are machine-specific and are not part of the Windows CPU backend bundle.

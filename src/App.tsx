@@ -328,11 +328,32 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${API_BASE}/api/health`, { signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then(() => { setHealth("online"); void loadProjects(); })
-      .catch(() => setHealth("offline"));
-    return () => controller.abort();
+    let timer: ReturnType<typeof window.setTimeout> | undefined;
+    let connected = false;
+
+    const checkHealth = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/health`, { signal: controller.signal });
+        if (!response.ok) throw new Error("Local service health check failed.");
+        if (!connected) void loadProjects();
+        connected = true;
+        setHealth("online");
+      } catch {
+        if (controller.signal.aborted) return;
+        connected = false;
+        setHealth("offline");
+      }
+
+      if (!controller.signal.aborted) {
+        timer = window.setTimeout(checkHealth, connected ? 5000 : 1000);
+      }
+    };
+
+    void checkHealth();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [loadProjects]);
 
   async function createProject(event: React.FormEvent) {
