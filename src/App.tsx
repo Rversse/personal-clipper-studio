@@ -530,6 +530,21 @@ function App() {
     }
   }
 
+  function updateEditorTrim(edge: "start" | "end", value: number) {
+    const activeStart = selectedSequenceIndex !== null ? clipSequence[selectedSequenceIndex]?.start ?? editStart : editStart;
+    const activeEnd = selectedSequenceIndex !== null ? clipSequence[selectedSequenceIndex]?.end ?? editEnd : editEnd;
+    const maximum = editorSourceDuration > 0 ? editorSourceDuration : Number.MAX_SAFE_INTEGER;
+    const nextStart = edge === "start" ? Math.max(0, Math.min(value, activeEnd - 0.5)) : activeStart;
+    const nextEnd = edge === "end" ? Math.min(maximum, Math.max(activeStart + 0.5, value)) : activeEnd;
+    setEditStart(nextStart);
+    setEditEnd(nextEnd);
+    if (selectedSequenceIndex !== null) {
+      setClipSequence(previous => previous.map((clip,index)=>index===selectedSequenceIndex
+        ? { ...clip, start: nextStart, end: nextEnd }
+        : clip));
+    }
+  }
+
   function splitSelectedTimelineClip() {
     const index = selectedSequenceIndex;
     const clip = index !== null ? clipSequence[index] : { start: editStart, end: editEnd, crop_zoom: cropZoom, crop_x: cropX, crop_y: cropY };
@@ -736,10 +751,10 @@ function App() {
                               onClick={event=>{event.stopPropagation();if(clipSequence.length)selectSequenceClip(clip,index);seekPreview(clip.start);}}
                               onKeyDown={event=>{if(event.key==="ArrowLeft"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.max(0,index-1));}if(event.key==="ArrowRight"&&clipSequence.length>1){event.preventDefault();reorderTimelineClip(index,Math.min(clipSequence.length-1,index+1));}}}
                               role="button" tabIndex={0} aria-label={"Video clip "+(index+1)+", "+formatTimestamp(clip.start)+" to "+formatTimestamp(clip.end)}>
-                              {clipSequence.length>0 && <span className="timeline-trim-handle left" title="Drag to trim clip start" onPointerDown={event=>beginTimelineTrim(event,index,"start")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
+                              {clipSequence.length>0 && <span className="timeline-trim-handle left" title="Drag to trim clip start" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"start")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
                               <b>{String(index+1).padStart(2,"0")}</b><span className="timeline-clip-time">{formatTimestamp(clip.start)}–{formatTimestamp(clip.end)}</span>
                               <small>{(clip.crop_zoom??1).toFixed(1)}×</small>
-                              {clipSequence.length>0 && <span className="timeline-trim-handle right" title="Drag to trim clip end" onPointerDown={event=>beginTimelineTrim(event,index,"end")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
+                              {clipSequence.length>0 && <span className="timeline-trim-handle right" title="Drag to trim clip end" onClick={event=>event.stopPropagation()} onPointerDown={event=>beginTimelineTrim(event,index,"end")} onPointerMove={moveTimelineTrim} onPointerUp={endTimelineTrim} onPointerCancel={endTimelineTrim}/>}
                             </div>;
                           })}
                           {timelineClips.length>0 && <i className="multitrack-playhead" style={{left:(timelinePlayheadOutput/timelineTotalDuration*100)+"%"}}/>}
@@ -789,8 +804,8 @@ function App() {
                       {clipSequence.length>0 && <div className="sequence-visual" aria-label="Visual clip sequence">{clipSequence.map((clip,index)=><button type="button" key={String(clip.start)+"-"+String(clip.end)+"-"+index} title={"Pilih klip "+(index+1)+": "+formatTimestamp(clip.start)+" – "+formatTimestamp(clip.end)} aria-label={"Pilih klip "+(index+1)} onClick={()=>selectSequenceClip(clip,index)} className={selectedSequenceIndex===index?"selected":""}><b>{String(index+1).padStart(2,"0")}</b><span>{formatDuration(clip.end-clip.start)}</span><small>{(clip.crop_zoom ?? 1).toFixed(1)}× crop</small></button>)}</div>}
                     </div>
                     <div className="trim-grid">
-                      <label>In point (seconds)<input type="number" min="0" step="0.1" value={editStart} onChange={e=>setEditStart(Math.max(0,Math.min(Number(e.target.value),editEnd-0.1)))}/></label>
-                      <label>Out point (seconds)<input type="number" min={editStart+0.1} step="0.1" value={editEnd} onChange={e=>setEditEnd(Math.max(editStart+0.1,Number(e.target.value)))}/></label>
+                      <label>In point (seconds)<input type="number" min="0" step="0.1" value={editStart} onChange={e=>updateEditorTrim("start",Number(e.target.value))}/></label>
+                      <label>Out point (seconds)<input type="number" min={editStart+0.1} step="0.1" value={editEnd} onChange={e=>updateEditorTrim("end",Number(e.target.value))}/></label>
                     </div>
                   </div>
                 </div>
