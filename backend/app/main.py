@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .database import EXPORT_DIR, MEDIA_DIR, THUMBNAIL_DIR, ensure_storage, get_connection
 from .media import create_thumbnail, probe_media
@@ -26,6 +26,7 @@ from .schemas import (
 )
 from . import ai_discovery, transcription, rendering, audio_analysis
 from .diagnostics import router as diagnostics_router
+from .security import ALLOWED_UI_ORIGINS
 from .ai_settings import router as ai_settings_router
 
 _EXPORT_WORKER_LOCK = threading.Lock()
@@ -167,9 +168,25 @@ app = FastAPI(
 app.include_router(diagnostics_router)
 app.include_router(ai_settings_router)
 
+@app.middleware("http")
+async def enforce_trusted_browser_origin(request, call_next):
+    """Block cross-origin browser requests to the unauthenticated loopback API.
+
+    Native/local clients without an Origin header remain supported. Browser requests
+    must originate from the desktop UI or the explicitly allowed development UI.
+    """
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in ALLOWED_UI_ORIGINS:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Origin browser tidak diizinkan."},
+        )
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:1420", "http://localhost:1420", "http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"],
+    allow_origins=sorted(ALLOWED_UI_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
