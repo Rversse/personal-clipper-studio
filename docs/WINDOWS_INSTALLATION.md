@@ -21,6 +21,14 @@ These tools are required for media metadata probing, thumbnail generation, optio
 
 Official Windows build information: https://www.gyan.dev/ffmpeg/builds/
 
+## In-app System Check
+
+Open **Settings → System check** in the desktop app to inspect required and optional runtime components. The page checks whether both `ffmpeg.exe` and `ffprobe.exe` can be launched from the app's inherited `PATH`, whether the bundled faster-whisper runtime imports successfully, and whether the selected AI provider has its minimum configuration. Missing FFmpeg/FFprobe includes a link to a Windows build page and instructions to add its `bin` directory to `PATH`. Ollama is optional and has a separate official Windows download link; it is not required when using Gemini.
+
+Python does not need a separate installation for the packaged Windows app. The CPU Whisper runtime is bundled; selected Whisper model weights download automatically on first use. If the bundled runtime itself is unavailable, repair or reinstall the application rather than installing Python packages into a separate system Python environment. After installing FFmpeg, restart the desktop app and run **Check again** so the backend receives the updated `PATH`.
+
+The System Check is diagnostic only: it does not install software, test Gemini credentials with a network request, or prove that an Ollama server/model is reachable. It never displays API keys or the Ollama endpoint URL.
+
 ## First launch
 
 - Packaged builds start the local API automatically at `127.0.0.1:8765`.
