@@ -54,10 +54,11 @@ class TranscriptWordUpdate(BaseModel):
 
 class TranscriptSegment(BaseModel):
     id: int | None = None
-    start: float
-    end: float
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
     text: str
     words: list[TranscriptWord] = Field(default_factory=list)
+
 
 
 class TranscriptionResponse(BaseModel):

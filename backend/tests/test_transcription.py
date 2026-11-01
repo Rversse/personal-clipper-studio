@@ -80,7 +80,7 @@ def test_transcription_job_persists_segments(tmp_path, monkeypatch):
         assert payload["detected_language"] == "id"
         assert payload["progress"] == 1
         assert payload["segments"] == [
-            {"start": 0.2, "end": 2.4, "text": "Halo semuanya."}
+            {"id": payload["segments"][0]["id"], "start": 0.2, "end": 2.4, "text": "Halo semuanya.", "words": []}
         ]
 
 
