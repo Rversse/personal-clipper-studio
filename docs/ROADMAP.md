@@ -29,7 +29,8 @@
 - [x] Subtitle Studio controls for font size, vertical position, outline, and background opacity, persisted through export rendering
 - [x] Ordered multi-clip sequence with per-clip trim ranges and reorder/remove controls
 - [x] FFmpeg sequence assembly with optional subtitle burn-in
-- [x] Crop zoom and horizontal/vertical focal positioning in preview and FFmpeg output
+- [x] Global crop zoom and horizontal/vertical focal positioning in preview and FFmpeg output
+- [x] Per-clip crop zoom and focal positioning, sequence selection, local draft persistence, and independent FFmpeg rendering
 - [x] Convert split markers into renderable sequence clips
 - [x] Source timeline ruler, live playhead, selected-range and split-point visualization, plus clickable sequence strip
 - [ ] Full visual multi-track timeline with per-track editing
