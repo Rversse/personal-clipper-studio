@@ -25,6 +25,7 @@ from .schemas import (
     ExportCreate, ExportResponse, ExportSubtitleSegment,
 )
 from . import ai_discovery, transcription, rendering, audio_analysis
+from .diagnostics import router as diagnostics_router
 
 _EXPORT_WORKER_LOCK = threading.Lock()
 _EXPORT_WORKER_WAKE = threading.Event()
@@ -119,6 +120,8 @@ app = FastAPI(
     description="Local-first API for projects, media import, transcription, AI clip discovery, and exports.",
     lifespan=lifespan,
 )
+
+app.include_router(diagnostics_router)
 
 app.add_middleware(
     CORSMiddleware,
