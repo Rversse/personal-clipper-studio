@@ -79,7 +79,9 @@
 
 ## Phase 7 — end-to-end reliability audit (in progress)
 - [x] Separate graceful-shutdown interruption from explicit export cancellation; preserve active export jobs for the next launch.
-- [ ] Exercise import → word-timestamp transcription → AI discovery → candidate validation → subtitle/crop editing → multi-clip export as one connected workflow.
-- [ ] Restart the desktop app during transcription, discovery, and export; verify queued/active jobs recover and terminal user cancellations remain terminal.
-- [ ] Verify export history, job status, progress, and downloadable MP4 integrity remain consistent after recovery.
-- [ ] Run the full workflow against a real local media fixture and perform a clean Windows installer install/launch/uninstall smoke test.
+- [x] Exercise the connected API workflow: import → word-timestamp transcription → persisted word edit → AI discovery/candidate validation → subtitle and per-clip crop/audio settings → multi-clip export. Deterministic providers and renderer are used for this API-state regression.
+- [x] Run a real-media integration path with a generated local video/audio fixture, real FFmpeg import/probe/thumbnail/render, and FFprobe verification of H.264/AAC 1080×1920 output and duration. Transcription and AI provider responses are deterministic test doubles in this test.
+- [x] Exercise restart recovery for transcription, discovery, and export jobs, including bounded crash retries, terminal user cancellation, interrupted/partial export cleanup, and preservation of atomically committed MP4 output.
+- [x] Verify recovered export history, job status, and completed-file download remain consistent after application storage is reopened.
+- [x] Build, install, launch, API/SQLite smoke-test, and uninstall both NSIS and MSI packages on the hosted Windows CI runner.
+- [ ] Manual packaged-desktop acceptance on a clean physical Windows machine: configure and test a real Gemini key or local Ollama model, download/run the selected Whisper model, process user media end to end, interrupt/relaunch during active jobs, and verify FFmpeg plus optional GPU/NVENC behavior. Hosted CI and deterministic test doubles do not satisfy this item.
