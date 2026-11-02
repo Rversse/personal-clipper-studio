@@ -744,7 +744,7 @@ def test_cancel_queued_export_changes_terminal_state(tmp_path, monkeypatch):
         assert client.post(f"/api/exports/{job_id}/cancel").status_code == 409
 
 
-def test_export_dequeued_during_shutdown_is_cancelled_before_render(tmp_path, monkeypatch):
+def test_export_dequeued_during_shutdown_is_requeued_before_render(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
     monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
@@ -769,8 +769,90 @@ def test_export_dequeued_during_shutdown_is_cancelled_before_render(tmp_path, mo
             job = connection.execute(
                 "SELECT status,error FROM export_jobs WHERE id=?", (job_id,)
             ).fetchone()
-        assert job["status"] == "cancelled"
-        assert "dibatalkan" in job["error"].casefold()
+        assert job["status"] == "queued"
+        assert job["error"] is None
+        assert rendering.get_control(job_id) is None
+
+
+def test_active_export_interruption_is_requeued_for_next_launch(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+
+    def interrupt_during_render(*args, **kwargs):
+        kwargs["control"].interrupt()
+        kwargs["control"].check()
+
+    monkeypatch.setattr(rendering, "render_sequence", interrupt_during_render)
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 20},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+        destination = database.EXPORT_DIR / response.json()["output_name"]
+
+        main_module.run_export_job(
+            job_id,
+            str(database.MEDIA_DIR / f"{media_id}.mp4"),
+            str(destination),
+        )
+
+        with database.get_connection() as connection:
+            job = connection.execute(
+                "SELECT status,progress,encoder,error FROM export_jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+        assert job["status"] == "queued"
+        assert job["progress"] == 0
+        assert job["encoder"] is None
+        assert job["error"] is None
+        assert not destination.exists()
+        assert rendering.get_control(job_id) is None
+
+
+def test_validated_output_survives_shutdown_after_atomic_publish(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+    monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
+    monkeypatch.setattr(main_module, "_is_completed_export", lambda path: path.is_file())
+
+    def publish_then_interrupt(source, destination, *args, **kwargs):
+        destination = Path(destination)
+        destination.write_bytes(b"validated-final-mp4")
+        kwargs["control"].interrupt()
+        return {"encoder": "libx264", "output": str(destination)}
+
+    monkeypatch.setattr(rendering, "render_sequence", publish_then_interrupt)
+
+    with TestClient(app) as client:
+        media_id = seed_media()
+        response = client.post(
+            f"/api/media/{media_id}/exports",
+            json={"start_seconds": 5, "end_seconds": 20},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["id"]
+        destination = database.EXPORT_DIR / response.json()["output_name"]
+
+        main_module.run_export_job(
+            job_id,
+            str(database.MEDIA_DIR / f"{media_id}.mp4"),
+            str(destination),
+        )
+
+        with database.get_connection() as connection:
+            job = connection.execute(
+                "SELECT status,progress,error FROM export_jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+        assert job["status"] == "completed"
+        assert job["progress"] == 1
+        assert job["error"] is None
+        assert destination.read_bytes() == b"validated-final-mp4"
         assert rendering.get_control(job_id) is None
 
 

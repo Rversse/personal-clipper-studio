@@ -28,7 +28,7 @@ The frontend retries the health endpoint while the service is starting and conti
 6. Run transcription, AI discovery, and rendering as durable background jobs with explicit state and cancellation.
 7. Persist transcription and discovery queue state in SQLite. Dedicated workers claim queued jobs atomically, deduplicate matching active requests, and recover interrupted work after restart with a bounded crash-retry budget.
 8. On graceful desktop shutdown, stop dequeuing transcription and discovery jobs, cooperatively stop active work, and leave unfinished jobs queued for the next launch. Do not discard pending work merely because the UI or API process closes.
-9. On restart, requeue interrupted exports from persisted render settings; validate completed MP4 artifacts with FFprobe and clean job-scoped temporary artifacts before retrying.
+9. On graceful desktop shutdown, interrupt active exports and return unfinished jobs to the durable queue; explicit user cancellation remains terminal. On restart, requeue crash-interrupted exports from persisted render settings, validate completed MP4 artifacts with FFprobe, and clean job-scoped temporary artifacts before retrying.
 10. AI output is advisory. Every candidate is reviewed by the user before export.
 11. Keep media processing provider-independent so FFmpeg and transcription engines can be replaced.
 
