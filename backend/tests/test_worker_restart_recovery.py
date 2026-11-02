@@ -251,3 +251,83 @@ def test_export_worker_shutdown_race_requeues_before_render_starts(tmp_path, mon
     assert not output.exists()
     assert rendering.get_control(export_id) is None
     main_module._EXPORT_WORKER_STOP.clear()
+
+
+def test_recovery_preserves_user_cancellation_and_fails_exhausted_crash_retries(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    _, transcript_id, discovery_id, _, _ = seed_media_and_jobs()
+    with database.get_connection() as connection:
+        connection.execute(
+            "UPDATE transcription_jobs SET status='cancelled',progress=0.6,error='Cancelled by user' WHERE id=?",
+            (transcript_id,),
+        )
+        connection.execute(
+            "UPDATE discovery_jobs SET attempt_count=? WHERE id=?",
+            (main_module.MAX_JOB_ATTEMPTS, discovery_id),
+        )
+
+    main_module._recover_interrupted_jobs()
+
+    with database.get_connection() as connection:
+        transcription_state = connection.execute(
+            "SELECT status,progress,attempt_count,error FROM transcription_jobs WHERE id=?",
+            (transcript_id,),
+        ).fetchone()
+        discovery_state = connection.execute(
+            "SELECT status,progress,attempt_count,error FROM discovery_jobs WHERE id=?",
+            (discovery_id,),
+        ).fetchone()
+
+    assert tuple(transcription_state) == ("cancelled", 0.6, 1, "Cancelled by user")
+    assert tuple(discovery_state) == (
+        "failed",
+        0.5,
+        main_module.MAX_JOB_ATTEMPTS,
+        "Pekerjaan dihentikan setelah beberapa kali crash aplikasi.",
+    )
+
+
+def test_export_recovery_keeps_atomically_committed_mp4(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    _, _, _, export_id, _ = seed_media_and_jobs()
+    output = database.EXPORT_DIR / f"clip-{export_id}.mp4"
+    output.write_bytes(b"validated-complete-mp4")
+    monkeypatch.setattr(
+        rendering,
+        "validate_mp4_output",
+        lambda path: {"video_codec": "h264"} if path == output and path.is_file() else (_ for _ in ()).throw(
+            rendering.RenderError("Invalid MP4")
+        ),
+    )
+
+    main_module.recover_interrupted_exports()
+
+    with database.get_connection() as connection:
+        state = connection.execute(
+            "SELECT status,progress FROM export_jobs WHERE id=?", (export_id,)
+        ).fetchone()
+    assert tuple(state) == ("completed", 1.0)
+    assert output.read_bytes() == b"validated-complete-mp4"
+
+
+def test_export_recovery_removes_partial_artifacts_before_requeue(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    _, _, _, export_id, _ = seed_media_and_jobs()
+    output = database.EXPORT_DIR / f"clip-{export_id}.mp4"
+    partial = output.with_name(output.stem + ".partial" + output.suffix)
+    temporary = output.with_name(f".{output.stem}-subtitle.ass")
+    output.write_bytes(b"corrupt-output")
+    partial.write_bytes(b"partial-output")
+    temporary.write_text("temporary subtitle", encoding="utf-8")
+    monkeypatch.setattr(main_module, "_is_completed_export", lambda _path: False)
+
+    main_module.recover_interrupted_exports()
+
+    with database.get_connection() as connection:
+        state = connection.execute(
+            "SELECT status,progress,encoder,error FROM export_jobs WHERE id=?", (export_id,)
+        ).fetchone()
+    assert tuple(state) == ("queued", 0.0, None, None)
+    assert not output.exists()
+    assert not partial.exists()
+    assert not temporary.exists()
