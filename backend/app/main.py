@@ -287,23 +287,15 @@ def recover_interrupted_exports() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_storage()
-    timestamp = now_iso()
-    with get_connection() as connection:
-        for table in ("transcription_jobs", "discovery_jobs"):
-            connection.execute(
-                f"""UPDATE {table} SET status='failed',
-                    error='Proses terhenti karena aplikasi sebelumnya ditutup.',
-                    updated_at=? WHERE status IN ('queued','processing')""",
-                (timestamp,),
-            )
+    _recover_interrupted_jobs()
     recover_interrupted_exports()
     _EXPORT_WORKER_STOP.clear()
     _JOB_SHUTDOWN.clear()
+    start_job_workers()
     start_export_worker()
     yield
     _EXPORT_WORKER_STOP.set()
-    _JOB_SHUTDOWN.set()
-    _cancel_background_jobs()
+    stop_job_workers()
     _EXPORT_WORKER_WAKE.set()
     # Stop FFmpeg/FFprobe work before waiting for the worker to exit. This keeps
     # the desktop shutdown path from leaving orphaned encoder processes behind.
@@ -731,8 +723,8 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
         check_cancelled()
         with get_connection() as connection:
             claimed = connection.execute(
-                "UPDATE transcription_jobs SET status='processing', updated_at=? WHERE id=? AND status='queued'",
-                (now_iso(), job_id),
+                "UPDATE transcription_jobs SET status='processing', attempt_count=attempt_count+1, progress=0, updated_at=? WHERE id=? AND status='queued' AND attempt_count < ?",
+                (now_iso(), job_id, MAX_JOB_ATTEMPTS),
             ).rowcount
         if not claimed:
             return
@@ -783,10 +775,16 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
             )
     except JobCancelled as error:
         with get_connection() as connection:
-            connection.execute(
-                "UPDATE transcription_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
-                (str(error), now_iso(), job_id),
-            )
+            if _JOB_SHUTDOWN.is_set():
+                connection.execute(
+                    "UPDATE transcription_jobs SET status='queued', progress=0, error=NULL, updated_at=? WHERE id=? AND status='processing'",
+                    (now_iso(), job_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE transcription_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
+                    (str(error), now_iso(), job_id),
+                )
     except Exception as error:
         with get_connection() as connection:
             connection.execute(
@@ -804,7 +802,6 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
 )
 async def start_transcription(
     asset_id: str,
-    background_tasks: BackgroundTasks,
     payload: TranscriptionCreate,
 ):
     if not transcription.is_available():
@@ -846,9 +843,7 @@ async def start_transcription(
             ) VALUES(?,?,'queued',?,?,?,?)""",
             (job_id, asset_id, payload.model_name, payload.language, timestamp, timestamp),
         )
-    background_tasks.add_task(
-        run_transcription_job, job_id, str(source_path), payload.model_name, payload.language
-    )
+    _TRANSCRIPTION_WAKE.set()
     return transcription_payload(job_id)
 
 
@@ -1076,8 +1071,8 @@ def run_discovery_job(job_id: str) -> None:
 
         with get_connection() as connection:
             claimed = connection.execute(
-                "UPDATE discovery_jobs SET status='processing', updated_at=? WHERE id=? AND status='queued'",
-                (now_iso(), job_id),
+                "UPDATE discovery_jobs SET status='processing', attempt_count=attempt_count+1, updated_at=? WHERE id=? AND status='queued' AND attempt_count < ?",
+                (now_iso(), job_id, MAX_JOB_ATTEMPTS),
             ).rowcount
         if not claimed:
             return
@@ -1197,10 +1192,16 @@ def run_discovery_job(job_id: str) -> None:
             )
     except JobCancelled as error:
         with get_connection() as connection:
-            connection.execute(
-                "UPDATE discovery_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
-                (str(error), now_iso(), job_id),
-            )
+            if _JOB_SHUTDOWN.is_set():
+                connection.execute(
+                    "UPDATE discovery_jobs SET status='queued', error=NULL, updated_at=? WHERE id=? AND status='processing'",
+                    (now_iso(), job_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE discovery_jobs SET status='cancelled', error=?, updated_at=? WHERE id=? AND status IN ('queued','processing')",
+                    (str(error), now_iso(), job_id),
+                )
     except Exception as error:
         with get_connection() as connection:
             connection.execute(
@@ -1218,7 +1219,6 @@ def run_discovery_job(job_id: str) -> None:
 )
 async def start_discovery(
     asset_id: str,
-    background_tasks: BackgroundTasks,
     payload: DiscoveryCreate,
 ):
     if payload.max_duration < payload.min_duration:
@@ -1266,7 +1266,7 @@ async def start_discovery(
                 payload.min_duration, payload.max_duration, timestamp, timestamp,
             ),
         )
-    background_tasks.add_task(run_discovery_job, job_id)
+    _DISCOVERY_WAKE.set()
     return discovery_payload(job_id)
 
 
