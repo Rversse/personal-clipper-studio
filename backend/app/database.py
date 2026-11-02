@@ -70,7 +70,6 @@ def ensure_storage() -> None:
                 text TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_transcription_media ON transcription_jobs(media_id);
-            CREATE INDEX IF NOT EXISTS idx_transcription_queue ON transcription_jobs(status,attempt_count,created_at,id);
             CREATE INDEX IF NOT EXISTS idx_transcript_job ON transcript_segments(job_id);
             CREATE TABLE IF NOT EXISTS transcript_words (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +121,6 @@ def ensure_storage() -> None:
                 UNIQUE(discovery_job_id, start_seconds, end_seconds)
             );
             CREATE INDEX IF NOT EXISTS idx_discovery_media ON discovery_jobs(media_id);
-            CREATE INDEX IF NOT EXISTS idx_discovery_queue ON discovery_jobs(status,attempt_count,created_at,id);
             CREATE INDEX IF NOT EXISTS idx_candidate_job ON clip_candidates(discovery_job_id);
             CREATE TABLE IF NOT EXISTS export_jobs (
                 id TEXT PRIMARY KEY,
@@ -156,6 +154,12 @@ def ensure_storage() -> None:
         discovery_columns = {row["name"] for row in connection.execute("PRAGMA table_info(discovery_jobs)").fetchall()}
         if "attempt_count" not in discovery_columns:
             connection.execute("ALTER TABLE discovery_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transcription_queue ON transcription_jobs(status,attempt_count,created_at,id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_discovery_queue ON discovery_jobs(status,attempt_count,created_at,id)"
+        )
 
         candidate_columns = {row["name"] for row in connection.execute("PRAGMA table_info(clip_candidates)").fetchall()}
         if "boundary_quality" not in candidate_columns:
