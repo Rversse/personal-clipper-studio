@@ -828,7 +828,13 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
             )
     except JobCancelled as error:
         with get_connection() as connection:
-            if _JOB_SHUTDOWN.is_set():
+            current = connection.execute(
+                "SELECT status FROM transcription_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            # A shutdown may be followed by a new app startup before an old,
+            # non-interruptible provider call returns. Preserve the durable
+            # queue state even if the global shutdown flag has since cleared.
+            if _JOB_SHUTDOWN.is_set() or (current is not None and current["status"] == "queued"):
                 connection.execute(
                     "UPDATE transcription_jobs SET status='queued', progress=0, attempt_count=MAX(0,attempt_count-1), error=NULL, updated_at=? WHERE id=? AND status='processing'",
                     (now_iso(), job_id),
@@ -1258,7 +1264,12 @@ def run_discovery_job(job_id: str) -> None:
             )
     except JobCancelled as error:
         with get_connection() as connection:
-            if _JOB_SHUTDOWN.is_set():
+            current = connection.execute(
+                "SELECT status FROM discovery_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            # Do not turn a shutdown-requeued job into a user cancellation
+            # after the next application startup clears the global flag.
+            if _JOB_SHUTDOWN.is_set() or (current is not None and current["status"] == "queued"):
                 connection.execute(
                     "UPDATE discovery_jobs SET status='queued', attempt_count=MAX(0,attempt_count-1), error=NULL, updated_at=? WHERE id=? AND status='processing'",
                     (now_iso(), job_id),
