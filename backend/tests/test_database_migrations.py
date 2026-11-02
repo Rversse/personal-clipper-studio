@@ -112,10 +112,10 @@ def test_legacy_database_upgrade_preserves_user_data_and_adds_schema(tmp_path, m
     database.ensure_storage()
 
     with database.get_connection() as connection:
-        assert tuple(connection.execute(
+        assert connection.execute(
             "SELECT name,description FROM projects WHERE id='p-legacy'"
         ).fetchone()) == ("Legacy project", "keep me")
-        assert tuple(connection.execute(
+        assert connection.execute(
             "SELECT original_name,file_size FROM media_assets WHERE id='m-legacy'"
         ).fetchone()) == ("original.mp4", 12345)
         assert tuple(connection.execute(
@@ -154,10 +154,10 @@ def test_legacy_database_upgrade_preserves_user_data_and_adds_schema(tmp_path, m
         assert tuple(connection.execute(
             "SELECT attempt_count FROM transcription_jobs WHERE id='t-legacy'"
         ).fetchone()[0] == 0
-        assert tuple(connection.execute(
+        assert connection.execute(
             "SELECT attempt_count FROM discovery_jobs WHERE id='d-legacy'"
         ).fetchone()[0] == 0
-        assert tuple(connection.execute(
+        assert connection.execute(
             "SELECT boundary_quality,context_note FROM clip_candidates WHERE id='c-legacy'"
         ).fetchone()) == (50, "")
         assert tuple(connection.execute(
@@ -165,9 +165,9 @@ def test_legacy_database_upgrade_preserves_user_data_and_adds_schema(tmp_path, m
         ).fetchone()) == ("clean", 1.0, 0.5, 0.5)
 
         assert tuple(connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
-        assert tuple(connection.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0] == 1
-        assert tuple(connection.execute("SELECT COUNT(*) FROM transcript_segments").fetchone()[0] == 1
-        assert tuple(connection.execute("SELECT COUNT(*) FROM clip_candidates").fetchone()[0] == 1
-        assert tuple(connection.execute("SELECT COUNT(*) FROM export_jobs").fetchone()[0] == 1
-        assert tuple(connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM transcript_segments").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM clip_candidates").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM export_jobs").fetchone()[0] == 1
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert tuple(connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
