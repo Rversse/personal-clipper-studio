@@ -223,9 +223,10 @@ def stop_job_workers() -> None:
     _JOB_WORKER_STOP.set()
     _TRANSCRIPTION_WAKE.set()
     _DISCOVERY_WAKE.set()
+    shutdown_deadline = time.monotonic() + 2.0
     for worker in (_TRANSCRIPTION_WORKER_THREAD, _DISCOVERY_WORKER_THREAD):
         if worker is not None:
-            worker.join(timeout=10)
+            worker.join(timeout=max(0.0, shutdown_deadline - time.monotonic()))
     with get_connection() as connection:
         for table in ("transcription_jobs", "discovery_jobs"):
             connection.execute(
