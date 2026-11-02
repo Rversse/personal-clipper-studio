@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from app import media
@@ -6,8 +7,9 @@ from app import media
 def test_packaged_media_tools_are_preferred_to_path(tmp_path, monkeypatch):
     tools_dir = tmp_path / "pcs-api" / "ffmpeg"
     tools_dir.mkdir(parents=True)
-    ffmpeg = tools_dir / "ffmpeg.exe"
-    ffprobe = tools_dir / "ffprobe.exe"
+    suffix = ".exe" if os.name == "nt" else ""
+    ffmpeg = tools_dir / f"ffmpeg{suffix}"
+    ffprobe = tools_dir / f"ffprobe{suffix}"
     ffmpeg.write_bytes(b"ffmpeg")
     ffprobe.write_bytes(b"ffprobe")
 
