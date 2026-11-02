@@ -110,6 +110,49 @@ def _unregister_job_control(job_id: str) -> None:
         _JOB_CANCEL_EVENTS.pop(job_id, None)
 
 
+def recover_interrupted_media_imports() -> dict[str, int]:
+    """Remove uncommitted media files left behind by a process killed during import.
+
+    Only UUID-owned filenames emitted by import_media are eligible. Files
+    referenced by media_assets are retained; unrelated user files are ignored.
+    The desktop app runs one local API process, so startup is a safe point to
+    reconcile abandoned staging and publish-before-DB-commit artifacts.
+    """
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT stored_name, thumbnail_name FROM media_assets"
+        ).fetchall()
+    referenced_media = {str(row["stored_name"]) for row in rows}
+    referenced_thumbnails = {
+        str(row["thumbnail_name"]) for row in rows if row["thumbnail_name"]
+    }
+
+    uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    removed = {"staged_media": 0, "orphan_media": 0, "staged_thumbnails": 0, "orphan_thumbnails": 0}
+
+    for path in MEDIA_DIR.iterdir():
+        if not path.is_file():
+            continue
+        if re.fullmatch(rf"\.{uuid_pattern}\.uploading", path.name):
+            path.unlink(missing_ok=True)
+            removed["staged_media"] += 1
+        elif re.fullmatch(rf"{uuid_pattern}\.[a-z0-9]+", path.name) and path.name not in referenced_media:
+            path.unlink(missing_ok=True)
+            removed["orphan_media"] += 1
+
+    for path in THUMBNAIL_DIR.iterdir():
+        if not path.is_file():
+            continue
+        if re.fullmatch(rf"\.{uuid_pattern}\.uploading\.jpg", path.name):
+            path.unlink(missing_ok=True)
+            removed["staged_thumbnails"] += 1
+        elif re.fullmatch(rf"{uuid_pattern}\.jpg", path.name) and path.name not in referenced_thumbnails:
+            path.unlink(missing_ok=True)
+            removed["orphan_thumbnails"] += 1
+
+    return removed
+
+
 def _recover_interrupted_jobs() -> None:
     """Requeue interrupted work after a crash, with a bounded crash-recovery budget."""
     timestamp = now_iso()
@@ -296,6 +339,7 @@ def recover_interrupted_exports() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_storage()
+    recover_interrupted_media_imports()
     _recover_interrupted_jobs()
     recover_interrupted_exports()
     _EXPORT_WORKER_STOP.clear()
