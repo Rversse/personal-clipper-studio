@@ -102,7 +102,7 @@ def test_import_transcribe_discover_and_export_pipeline(tmp_path, monkeypatch):
         destination.parent.mkdir(parents=True, exist_ok=True)
         # A deterministic MP4-shaped artifact; real encoding is covered by
         # test_real_ffmpeg_sequence_render_produces_vertical_h264_aac_mp4.
-        destination.write_bytes(b"\\x00\\x00\\x00\\x18ftypisom" + b"x" * 2048)
+        destination.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"x" * 2048)
         return {"encoder": "libx264"}
 
     monkeypatch.setattr(main_module, "probe_media", fake_probe)
