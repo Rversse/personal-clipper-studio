@@ -301,7 +301,14 @@ def test_real_media_api_import_transcribe_discover_and_export(tmp_path, monkeypa
                 "start": 0.0,
                 "end": 16.0,
                 "text": "Ini adalah transkrip pengujian video nyata.",
-                "words": [],
+                "words": [
+                    {"start": 0.4, "end": 1.1, "text": "Ini", "probability": 0.99},
+                    {"start": 1.15, "end": 1.8, "text": "adalah", "probability": 0.99},
+                    {"start": 1.85, "end": 2.8, "text": "transkrip", "probability": 0.98},
+                    {"start": 2.85, "end": 3.6, "text": "pengujian", "probability": 0.98},
+                    {"start": 3.65, "end": 4.2, "text": "video", "probability": 0.99},
+                    {"start": 4.25, "end": 5.1, "text": "nyata.", "probability": 0.99},
+                ],
             }],
         }
 
@@ -374,6 +381,7 @@ def test_real_media_api_import_transcribe_discover_and_export(tmp_path, monkeypa
         transcript = client.get(f"/api/transcriptions/{transcription_id}").json()
         assert transcript["status"] == "completed"
         assert len(transcript["segments"]) == 1
+        assert len(transcript["segments"][0]["words"]) == 6
 
         discovery_response = client.post(
             f"/api/media/{media_id}/discovery",
@@ -404,6 +412,10 @@ def test_real_media_api_import_transcribe_discover_and_export(tmp_path, monkeypa
                 "quality_profile": "balanced",
                 "frame_rate": 24,
                 "burn_subtitles": False,
+                "clip_segments": [
+                    {"start": 0.5, "end": 7.5},
+                    {"start": 8.0, "end": 15.5},
+                ],
             },
         )
         assert export_response.status_code == 202, export_response.text
@@ -418,6 +430,7 @@ def test_real_media_api_import_transcribe_discover_and_export(tmp_path, monkeypa
         exported = client.get(f"/api/exports/{export_id}").json()
         assert exported["status"] == "completed"
         assert exported["progress"] == 1
+        assert exported["clip_count"] == 2
         assert output.is_file() and output.stat().st_size > 1024
 
         probe = subprocess.run(
@@ -437,7 +450,7 @@ def test_real_media_api_import_transcribe_discover_and_export(tmp_path, monkeypa
         assert (video["width"], video["height"]) == (1080, 1920)
         assert video["codec_name"] == "h264"
         assert audio["codec_name"] == "aac"
-        assert 14.5 <= float(metadata["format"]["duration"]) <= 15.5
+        assert 13.5 <= float(metadata["format"]["duration"]) <= 15.5
 
         download = client.get(f"/api/exports/{export_id}/file")
         assert download.status_code == 200
