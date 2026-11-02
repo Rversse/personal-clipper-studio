@@ -185,3 +185,69 @@ def test_transcription_discovery_and_export_resume_after_restart(tmp_path, monke
     assert tuple(export) == ("completed", 1.0, "libx264")
     assert output.is_file()
     assert output.read_bytes() == b"recovered-mp4-artifact"
+
+
+
+def test_shutdown_requeues_active_transcription_and_discovery_without_burning_attempts(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    _, transcript_id, discovery_id, _, _ = seed_media_and_jobs()
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._JOB_WORKER_STOP.clear()
+    monkeypatch.setattr(main_module, "_TRANSCRIPTION_WORKER_THREAD", None)
+    monkeypatch.setattr(main_module, "_DISCOVERY_WORKER_THREAD", None)
+
+    main_module.stop_job_workers()
+
+    with database.get_connection() as connection:
+        transcription_state = connection.execute(
+            "SELECT status,progress,attempt_count,error FROM transcription_jobs WHERE id=?",
+            (transcript_id,),
+        ).fetchone()
+        discovery_state = connection.execute(
+            "SELECT status,progress,attempt_count,error FROM discovery_jobs WHERE id=?",
+            (discovery_id,),
+        ).fetchone()
+
+    assert tuple(transcription_state) == ("queued", 0.0, 0, None)
+    assert tuple(discovery_state) == ("queued", 0.0, 0, None)
+    assert main_module._JOB_SHUTDOWN.is_set()
+    assert main_module._JOB_WORKER_STOP.is_set()
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._JOB_WORKER_STOP.clear()
+
+
+def test_job_control_registered_after_shutdown_is_cancelled_immediately(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    main_module._JOB_SHUTDOWN.set()
+    event = main_module._register_job_control("late-worker-registration")
+    try:
+        assert event.is_set()
+    finally:
+        main_module._unregister_job_control("late-worker-registration")
+        main_module._JOB_SHUTDOWN.clear()
+
+
+def test_export_worker_shutdown_race_requeues_before_render_starts(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    _, _, _, export_id, source = seed_media_and_jobs()
+    main_module._EXPORT_WORKER_STOP.clear()
+    main_module.recover_interrupted_exports()
+    main_module._EXPORT_WORKER_STOP.set()
+    monkeypatch.setattr(main_module, "_is_completed_export", lambda _path: False)
+
+    def render_must_not_start(*args, **kwargs):
+        raise AssertionError("FFmpeg must not start after export worker shutdown.")
+
+    monkeypatch.setattr(rendering, "render_sequence", render_must_not_start)
+    output = database.EXPORT_DIR / f"clip-{export_id}.mp4"
+    main_module.run_export_job(export_id, str(source), str(output))
+
+    with database.get_connection() as connection:
+        state = connection.execute(
+            "SELECT status,progress,encoder,error FROM export_jobs WHERE id=?",
+            (export_id,),
+        ).fetchone()
+    assert tuple(state) == ("queued", 0.0, None, None)
+    assert not output.exists()
+    assert rendering.get_control(export_id) is None
+    main_module._EXPORT_WORKER_STOP.clear()
