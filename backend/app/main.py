@@ -308,7 +308,7 @@ async def lifespan(_: FastAPI):
     _EXPORT_WORKER_WAKE.set()
     # Stop FFmpeg/FFprobe work before waiting for the worker to exit. This keeps
     # the desktop shutdown path from leaving orphaned encoder processes behind.
-    rendering.cancel_all_controls()
+    rendering.interrupt_all_controls()
     if _EXPORT_WORKER_THREAD is not None:
         _EXPORT_WORKER_THREAD.join(timeout=10)
 
@@ -1396,7 +1396,7 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
     # Close the race where shutdown begins after the worker dequeues a job but
     # before its render control is visible to cancel_all_controls().
     if _EXPORT_WORKER_STOP.is_set():
-        control.cancel()
+        control.interrupt()
 
     def update_progress(value: float) -> None:
         with get_connection() as connection:
@@ -1443,6 +1443,26 @@ def run_export_job(job_id: str, source_path: str, destination_path: str) -> None
                    encoder=?, error=NULL, updated_at=? WHERE id=? AND status='processing'""",
                 (result["encoder"], now_iso(), job_id),
             )
+    except rendering.RenderInterrupted:
+        destination = Path(destination_path)
+        if _is_completed_export(destination):
+            # FFmpeg may have atomically published and validated the final MP4
+            # just before shutdown arrived. Preserve that completed artifact.
+            with get_connection() as connection:
+                connection.execute(
+                    """UPDATE export_jobs SET status='completed', progress=1,
+                       error=NULL, updated_at=? WHERE id=? AND status='processing'""",
+                    (now_iso(), job_id),
+                )
+        else:
+            _cleanup_interrupted_export_artifacts(destination)
+            destination.unlink(missing_ok=True)
+            with get_connection() as connection:
+                connection.execute(
+                    """UPDATE export_jobs SET status='queued', progress=0, encoder=NULL,
+                       error=NULL, updated_at=? WHERE id=? AND status IN ('queued','processing')""",
+                    (now_iso(), job_id),
+                )
     except rendering.RenderCancelled:
         Path(destination_path).unlink(missing_ok=True)
         with get_connection() as connection:
