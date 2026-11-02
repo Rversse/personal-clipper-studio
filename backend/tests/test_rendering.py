@@ -776,6 +776,7 @@ def test_export_dequeued_during_shutdown_is_requeued_before_render(tmp_path, mon
 
 def test_active_export_interruption_is_requeued_for_next_launch(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
     monkeypatch.setattr(rendering, "available_encoder", lambda: "libx264")
 
     def interrupt_during_render(*args, **kwargs):
