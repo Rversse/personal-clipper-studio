@@ -148,7 +148,15 @@ def _queued_transcription() -> tuple[str, str, str, str | None] | None:
                 ("Referensi file media tidak valid; transkripsi tidak dapat dijalankan.", now_iso(), row["id"]),
             )
         return ("", "", "", None)
-    source = _managed_file_path(MEDIA_DIR, row["stored_name"], f"{row['media_id']}{extension}")
+    try:
+        source = _managed_file_path(MEDIA_DIR, row["stored_name"], f"{row['media_id']}{extension}")
+    except HTTPException:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status='queued'",
+                ("Referensi file media tidak valid; transkripsi tidak dapat dijalankan.", now_iso(), row["id"]),
+            )
+        return ("", "", "", None)
     if not source.is_file():
         with get_connection() as connection:
             connection.execute(
@@ -837,12 +845,26 @@ async def start_transcription(
         source_path = _managed_file_path(MEDIA_DIR, media["stored_name"], f"{asset_id}{extension}")
         if not source_path.is_file():
             raise HTTPException(status_code=404, detail="File media tidak ditemukan di penyimpanan.")
-        connection.execute(
-            """INSERT INTO transcription_jobs(
-                id,media_id,status,model_name,language,created_at,updated_at
-            ) VALUES(?,?,'queued',?,?,?,?)""",
-            (job_id, asset_id, payload.model_name, payload.language, timestamp, timestamp),
-        )
+        active = connection.execute(
+            """SELECT id,model_name,language FROM transcription_jobs
+               WHERE media_id=? AND status IN ('queued','processing')
+               ORDER BY created_at DESC LIMIT 1""",
+            (asset_id,),
+        ).fetchone()
+        if active is not None:
+            if active["model_name"] != payload.model_name or active["language"] != payload.language:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Transkripsi untuk video ini sedang berjalan dengan konfigurasi berbeda.",
+                )
+            job_id = str(active["id"])
+        else:
+            connection.execute(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,language,created_at,updated_at
+                ) VALUES(?,?,'queued',?,?,?,?)""",
+                (job_id, asset_id, payload.model_name, payload.language, timestamp, timestamp),
+            )
     _TRANSCRIPTION_WAKE.set()
     return transcription_payload(job_id)
 
@@ -1255,17 +1277,39 @@ async def start_discovery(
             raise HTTPException(
                 status_code=409, detail="Transkripsi harus selesai sebelum analisis AI dimulai."
             )
-        connection.execute(
-            """INSERT INTO discovery_jobs(
-                id,media_id,transcription_id,status,provider,model_name,mode,category,
-                min_duration,max_duration,created_at,updated_at
-            ) VALUES(?,?,?,'queued',?,?,?,?,?,?,?,?)""",
-            (
-                job_id, asset_id, payload.transcription_id, settings["provider"],
-                settings["model"], payload.mode, payload.category,
-                payload.min_duration, payload.max_duration, timestamp, timestamp,
-            ),
-        )
+        active = connection.execute(
+            """SELECT id,provider,model_name,mode,category,min_duration,max_duration
+               FROM discovery_jobs WHERE transcription_id=? AND status IN ('queued','processing')
+               ORDER BY created_at DESC LIMIT 1""",
+            (payload.transcription_id,),
+        ).fetchone()
+        if active is not None:
+            same_request = (
+                active["provider"] == settings["provider"]
+                and active["model_name"] == settings["model"]
+                and active["mode"] == payload.mode
+                and active["category"] == payload.category
+                and active["min_duration"] == payload.min_duration
+                and active["max_duration"] == payload.max_duration
+            )
+            if not same_request:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Analisis AI untuk transkrip ini sedang berjalan dengan konfigurasi berbeda.",
+                )
+            job_id = str(active["id"])
+        else:
+            connection.execute(
+                """INSERT INTO discovery_jobs(
+                    id,media_id,transcription_id,status,provider,model_name,mode,category,
+                    min_duration,max_duration,created_at,updated_at
+                ) VALUES(?,?,?,'queued',?,?,?,?,?,?,?,?)""",
+                (
+                    job_id, asset_id, payload.transcription_id, settings["provider"],
+                    settings["model"], payload.mode, payload.category,
+                    payload.min_duration, payload.max_duration, timestamp, timestamp,
+                ),
+            )
     _DISCOVERY_WAKE.set()
     return discovery_payload(job_id)
 
