@@ -22,6 +22,10 @@ class RenderCancelled(RenderError):
     """Raised when an export job is explicitly cancelled."""
 
 
+class RenderInterrupted(RenderError):
+    """Raised when application shutdown interrupts an export for later recovery."""
+
+
 QUALITY_PROFILES = {
     "balanced": {"cpu_preset": "medium", "cpu_crf": "20", "nvenc_preset": "p5", "nvenc_cq": "23"},
     "high": {"cpu_preset": "slow", "cpu_crf": "18", "nvenc_preset": "p6", "nvenc_cq": "20"},
@@ -34,32 +38,46 @@ class RenderControl:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cancelled = threading.Event()
+        self._interrupted = threading.Event()
         self._process: subprocess.Popen | None = None
+
+    def _stop_process(self, force: bool = False) -> None:
+        with self._lock:
+            process = self._process
+        if process is None or process.poll() is not None:
+            return
+        try:
+            if force:
+                process.kill()
+            else:
+                process.terminate()
+            process.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
 
     def cancel(self) -> None:
         self._cancelled.set()
-        with self._lock:
-            process = self._process
-        if process is not None and process.poll() is None:
-            try:
-                process.terminate()
-                process.wait(timeout=3)
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    process.kill()
-                    process.wait(timeout=3)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
+        self._stop_process()
+
+    def interrupt(self) -> None:
+        self._interrupted.set()
+        self._stop_process()
 
     def check(self) -> None:
         if self._cancelled.is_set():
             raise RenderCancelled("Export dibatalkan oleh pengguna.")
+        if self._interrupted.is_set():
+            raise RenderInterrupted("Export dihentikan sementara karena aplikasi sedang ditutup.")
 
     def attach(self, process: subprocess.Popen) -> None:
         with self._lock:
             self._process = process
-            cancelled = self._cancelled.is_set()
-        if cancelled and process.poll() is None:
+            stopped = self._cancelled.is_set() or self._interrupted.is_set()
+        if stopped and process.poll() is None:
             try:
                 process.kill()
             except OSError:
@@ -93,11 +111,20 @@ def unregister_control(job_id: str) -> None:
 
 
 def cancel_all_controls() -> int:
-    """Request cancellation of every render owned by the current API process."""
+    """Cancel every render explicitly, preserving user-requested terminal semantics."""
     with _CONTROLS_LOCK:
         controls = list(_CONTROLS.values())
     for control in controls:
         control.cancel()
+    return len(controls)
+
+
+def interrupt_all_controls() -> int:
+    """Interrupt active renders so their durable jobs can resume on next launch."""
+    with _CONTROLS_LOCK:
+        controls = list(_CONTROLS.values())
+    for control in controls:
+        control.interrupt()
     return len(controls)
 
 
