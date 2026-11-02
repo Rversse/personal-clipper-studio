@@ -164,6 +164,16 @@ def test_import_transcribe_discover_and_export_pipeline(tmp_path, monkeypatch):
         assert len(transcript["segments"]) == 6
         assert len(transcript["segments"][0]["words"]) == 5
 
+        # Exercise the same persisted word-timing edit used by the timeline editor.
+        first_segment = transcript["segments"][0]
+        edited_word = client.patch(
+            f"/api/transcriptions/{transcription_id}/segments/{first_segment['id']}/words/0",
+            json={"start": 0.25, "end": 0.95, "text": "Halo"},
+        )
+        assert edited_word.status_code == 200, edited_word.text
+        assert edited_word.json()["segments"][0]["words"][0]["start"] == 0.25
+        assert edited_word.json()["segments"][0]["words"][0]["end"] == 0.95
+
         discovery_response = client.post(
             f"/api/media/{media_id}/discovery",
             json={
@@ -199,8 +209,16 @@ def test_import_transcribe_discover_and_export_pipeline(tmp_path, monkeypatch):
                 "output_preset": "youtube_shorts",
                 "burn_subtitles": True,
                 "clip_segments": [
-                    {"start": candidate_start, "end": candidate_end},
-                    {"start": 65, "end": 95},
+                    {
+                        "start": candidate_start, "end": candidate_end,
+                        "crop_zoom": 1.6, "crop_x": 0.35, "crop_y": 0.62,
+                        "audio_volume": 0.8,
+                    },
+                    {
+                        "start": 65, "end": 95,
+                        "crop_zoom": 1.2, "crop_x": 0.55, "crop_y": 0.4,
+                        "audio_volume": 0.0,
+                    },
                 ],
             },
         )
@@ -218,6 +236,16 @@ def test_import_transcribe_discover_and_export_pipeline(tmp_path, monkeypatch):
         assert export["download_url"] == f"/api/exports/{export_id}/file"
 
         assert len(observed["clip_segments"]) == 2
+        assert observed["clip_segments"][0] == {
+            "start": candidate_start, "end": candidate_end,
+            "crop_zoom": 1.6, "crop_x": 0.35, "crop_y": 0.62,
+            "audio_volume": 0.8,
+        }
+        assert observed["clip_segments"][1] == {
+            "start": 65, "end": 95,
+            "crop_zoom": 1.2, "crop_x": 0.55, "crop_y": 0.4,
+            "audio_volume": 0.0,
+        }
         assert observed["aspect_ratio"] == "9:16"
         assert observed["quality_profile"] == "balanced"
         assert observed["subtitles"]
