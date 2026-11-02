@@ -422,6 +422,10 @@ def test_ensure_storage_migrates_legacy_transcript_database(tmp_path, monkeypatc
                 (job_id, 0.1, 1.2, "Legacy words are not available"),
             )
             connection.execute("DROP TABLE transcript_words")
+            connection.execute("DROP INDEX idx_transcription_queue")
+            connection.execute("DROP INDEX idx_discovery_queue")
+            connection.execute("ALTER TABLE transcription_jobs DROP COLUMN attempt_count")
+            connection.execute("ALTER TABLE discovery_jobs DROP COLUMN attempt_count")
 
         database.ensure_storage()
 
@@ -435,6 +439,19 @@ def test_ensure_storage_migrates_legacy_transcript_database(tmp_path, monkeypatc
                 for row in connection.execute("PRAGMA index_list(transcript_words)").fetchall()
             }
             assert "idx_transcript_words_job_segment" in indexes
+            transcription_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(transcription_jobs)").fetchall()
+            }
+            discovery_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(discovery_jobs)").fetchall()
+            }
+            assert "attempt_count" in transcription_columns
+            assert "attempt_count" in discovery_columns
+            queue_indexes = {
+                row["name"]
+                for row in connection.execute("PRAGMA index_list(transcription_jobs)").fetchall()
+            }
+            assert "idx_transcription_queue" in queue_indexes
         response = client.get(f"/api/transcriptions/{job_id}")
         assert response.status_code == 200
         assert response.json()["segments"][0]["text"] == "Legacy words are not available"
