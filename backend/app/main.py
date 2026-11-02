@@ -230,7 +230,7 @@ def stop_job_workers() -> None:
     with get_connection() as connection:
         for table in ("transcription_jobs", "discovery_jobs"):
             connection.execute(
-                f"UPDATE {table} SET status='queued',progress=0,error=NULL,updated_at=? WHERE status='processing'",
+                f"UPDATE {table} SET status='queued',progress=0,attempt_count=MAX(0,attempt_count-1),error=NULL,updated_at=? WHERE status='processing'",
                 (now_iso(),),
             )
 
@@ -786,7 +786,7 @@ def run_transcription_job(job_id: str, source_path: str, model_name: str, langua
         with get_connection() as connection:
             if _JOB_SHUTDOWN.is_set():
                 connection.execute(
-                    "UPDATE transcription_jobs SET status='queued', progress=0, error=NULL, updated_at=? WHERE id=? AND status='processing'",
+                    "UPDATE transcription_jobs SET status='queued', progress=0, attempt_count=MAX(0,attempt_count-1), error=NULL, updated_at=? WHERE id=? AND status='processing'",
                     (now_iso(), job_id),
                 )
             else:
@@ -1216,7 +1216,7 @@ def run_discovery_job(job_id: str) -> None:
         with get_connection() as connection:
             if _JOB_SHUTDOWN.is_set():
                 connection.execute(
-                    "UPDATE discovery_jobs SET status='queued', error=NULL, updated_at=? WHERE id=? AND status='processing'",
+                    "UPDATE discovery_jobs SET status='queued', attempt_count=MAX(0,attempt_count-1), error=NULL, updated_at=? WHERE id=? AND status='processing'",
                     (now_iso(), job_id),
                 )
             else:
