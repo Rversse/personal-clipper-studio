@@ -19,6 +19,19 @@ def setup_test_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "test.sqlite3")
 
 
+def wait_for_discovery(client, job_id: str, timeout: float = 8.0):
+    deadline = time.monotonic() + timeout
+    latest = None
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/discovery/{job_id}")
+        assert response.status_code == 200
+        latest = response.json()
+        if latest["status"] in {"completed", "failed", "cancelled"}:
+            return latest
+        time.sleep(0.02)
+    raise AssertionError(f"Discovery job did not finish; last state: {latest}")
+
+
 def seed_completed_transcript():
     project_id = str(uuid.uuid4())
     media_id = str(uuid.uuid4())
@@ -151,9 +164,7 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
             },
         )
         assert response.status_code == 202
-        result = client.get(f"/api/discovery/{response.json()['id']}")
-        assert result.status_code == 200
-        payload = result.json()
+        payload = wait_for_discovery(client, response.json()["id"])
         assert payload["status"] == "completed"
         assert payload["progress"] == 1
         assert len(payload["candidates"]) == 1
@@ -526,9 +537,8 @@ def test_discovery_job_loads_persisted_words_for_candidate_refinement(tmp_path, 
             },
         )
         assert created.status_code == 202
-        result = client.get(f"/api/discovery/{created.json()['id']}")
-        assert result.status_code == 200
-        candidate = result.json()["candidates"][0]
+        result = wait_for_discovery(client, created.json()["id"])
+        candidate = result["candidates"][0]
         assert candidate["start_seconds"] == 10.1
         assert candidate["end_seconds"] == 59.9
         assert "Presisi kata" in candidate["opening_boundary"]
