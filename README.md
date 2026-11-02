@@ -35,7 +35,7 @@ For development:
 - Node.js 20+
 - Python 3.11+
 - Rust stable toolchain and the Tauri v2 Windows prerequisites
-- FFmpeg and FFprobe on PATH for media probing, thumbnails, audio analysis, and export
+- FFmpeg and FFprobe are bundled in the Windows installer; development runs may use tools on PATH
 - WebView2 Runtime (normally present on supported Windows installations)
 
 Optional:
@@ -84,7 +84,7 @@ Additional setup and Windows packaging details are in [docs/DEVELOPMENT.md](docs
 - Gemini API credentials should be configured through the app's secure settings or the backend environment. Never commit real credentials.
 - AI discovery sends transcript text to the selected provider. It does not upload the original video as part of the discovery request. Review the selected provider's data-handling terms before using it.
 - Ollama can run locally; model downloads and inference resource requirements depend on the model selected.
-- FFmpeg and FFprobe are separate dependencies and are not bundled with the app.
+- Windows release builds bundle FFmpeg and FFprobe; users do not need to install them or edit PATH. Development runs can use local FFmpeg/FFprobe binaries on PATH.
 
 See [backend/README.md](backend/README.md) for backend configuration details.
 
@@ -107,7 +107,7 @@ python -m pip install -e ".[dev]"
 pytest -q
 ```
 
-Windows installer artifacts are produced by the Windows desktop workflow when its required runner is available. The workflow currently builds unsigned NSIS and MSI installers; users may see Windows SmartScreen warnings until a release is signed with a trusted code-signing certificate.
+Windows installer artifacts are produced by the Windows desktop workflow when its required runner is available. The workflow produces one unsigned NSIS `.exe` installer with the local API, FFmpeg, and FFprobe bundled. Users may see Windows SmartScreen warnings until a release is signed with a trusted code-signing certificate.
 
 ## Security
 

@@ -103,6 +103,29 @@ def main() -> int:
             f"stdout: {runtime_check.stdout} stderr: {runtime_check.stderr}"
         )
 
+    # The release workflow stages FFmpeg tools beside pcs-api.exe before
+    # this test runs. Verify the exact packaged files, not the runner PATH.
+    bundled_media = executable.parent / "ffmpeg"
+    for tool_name in ("ffmpeg.exe", "ffprobe.exe"):
+        tool_path = bundled_media / tool_name
+        if not tool_path.is_file():
+            raise RuntimeError(f"Packaged media tool is missing: {tool_path}")
+        version_check = subprocess.run(
+            [str(tool_path), "-version"],
+            cwd=executable.parent,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        if version_check.returncode != 0 or tool_name.removesuffix(".exe") not in version_check.stdout.lower():
+            raise RuntimeError(
+                f"Packaged media tool failed its version check: {tool_path}. "
+                f"stdout: {version_check.stdout} stderr: {version_check.stderr}"
+            )
+
     port = _free_loopback_port()
     session_token = str(uuid.uuid4())
     authorization = {"Authorization": f"Bearer {session_token}"}

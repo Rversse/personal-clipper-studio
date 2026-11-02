@@ -28,8 +28,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis",
-      "msi"
+      "nsis"
     ],
     "shortDescription": "Local-first video clipping workspace",
     "category": "Video",

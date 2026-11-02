@@ -80,10 +80,38 @@ jobs:
           }
           New-Item -ItemType Directory -Force -Path $resourceDir | Out-Null
           Copy-Item (Join-Path $sourceDir "*") $resourceDir -Recurse -Force
+      - name: Download and bundle FFmpeg and FFprobe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-release-essentials.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "ffmpeg-release-essentials"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
+          $bin = Get-ChildItem $extract -Directory | ForEach-Object { Join-Path $_.FullName "bin" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $bin) { throw "FFmpeg archive does not contain a bin directory." }
+          $target = "src-tauri/resources/pcs-api/ffmpeg"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          foreach ($name in @("ffmpeg.exe", "ffprobe.exe")) {
+            $source = Join-Path $bin $name
+            if (-not (Test-Path $source)) { throw "Missing required media executable: $source" }
+            Copy-Item $source $target
+          }
+          if (-not (Test-Path (Join-Path $target "ffmpeg.exe")) -or -not (Test-Path (Join-Path $target "ffprobe.exe"))) {
+            throw "Bundled FFmpeg/FFprobe verification failed."
+          }
       - name: Smoke-test packaged backend executable
         run: python scripts/smoke_test_packaged_backend.py src-tauri/resources/pcs-api/pcs-api.exe
-      - name: Build unsigned NSIS and MSI installers
-        run: npm run tauri -- build --bundles nsis,msi
+      - name: Verify bundled media tools
+        shell: pwsh
+        run: |
+          $tools = "src-tauri/resources/pcs-api/ffmpeg"
+          & (Join-Path $tools "ffmpeg.exe") -version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled FFmpeg failed its version check." }
+          & (Join-Path $tools "ffprobe.exe") -version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled FFprobe failed its version check." }
+      - name: Build single unsigned NSIS installer
+        run: npm run tauri -- build --bundles nsis
       - name: Stage installers and checksums
         shell: pwsh
         run: |
@@ -91,20 +119,18 @@ jobs:
           $artifactDir = "build/windows-artifacts"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
           $nsisFiles = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
-          $msiFiles = @(Get-ChildItem "src-tauri/target/release/bundle/msi" -Filter "*.msi" -File)
-          if ($nsisFiles.Count -eq 0 -or $msiFiles.Count -eq 0) {
-            throw "Expected both NSIS and MSI installers, but one or both outputs are missing."
+          if ($nsisFiles.Count -ne 1) {
+            throw "Expected exactly one NSIS setup.exe, found $($nsisFiles.Count)."
           }
           Copy-Item $nsisFiles.FullName $artifactDir
-          Copy-Item $msiFiles.FullName $artifactDir
           Copy-Item "docs/WINDOWS_INSTALLATION.md" $artifactDir
           $checksums = Get-ChildItem $artifactDir -File |
-            Where-Object { $_.Extension -in @(".exe", ".msi") } |
+            Where-Object { $_.Extension -eq ".exe" } |
             Get-FileHash -Algorithm SHA256
           $checksums | ForEach-Object {
             "$($_.Hash)  $([System.IO.Path]::GetFileName($_.Path))"
           } | Set-Content (Join-Path $artifactDir "SHA256SUMS.txt")
-      - name: Install, launch, and uninstall both Windows packages
+      - name: Install, launch, and uninstall the single Windows package
         shell: pwsh
         run: ./scripts/smoke_test_windows_installers.ps1 -ArtifactDirectory "build/windows-artifacts"
       - name: Upload Windows installers
