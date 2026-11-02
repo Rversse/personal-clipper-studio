@@ -379,6 +379,11 @@ def test_recovered_export_history_and_download_survive_application_restart(tmp_p
 def test_transcription_shutdown_requeue_survives_next_startup(tmp_path, monkeypatch):
     setup_storage(tmp_path, monkeypatch)
     _, transcript_id, _, _, source = seed_media_and_jobs()
+    with database.get_connection() as connection:
+        connection.execute(
+            "UPDATE transcription_jobs SET status='queued',progress=0,attempt_count=0 WHERE id=?",
+            (transcript_id,),
+        )
     main_module._JOB_SHUTDOWN.clear()
     main_module._JOB_WORKER_STOP.clear()
     monkeypatch.setattr(main_module, "_TRANSCRIPTION_WORKER_THREAD", None)
@@ -425,6 +430,10 @@ def test_discovery_shutdown_requeue_survives_next_startup(tmp_path, monkeypatch)
     setup_storage(tmp_path, monkeypatch)
     _, transcript_id, discovery_id, _, source = seed_media_and_jobs()
     with database.get_connection() as connection:
+        connection.execute(
+            "UPDATE discovery_jobs SET status='queued',progress=0,attempt_count=0 WHERE id=?",
+            (discovery_id,),
+        )
         connection.execute(
             "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
             (transcript_id, 0.0, 20.0, "Transkrip untuk uji shutdown discovery."),
