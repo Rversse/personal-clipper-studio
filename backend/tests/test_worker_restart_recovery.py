@@ -75,6 +75,8 @@ def seed_media_and_jobs():
 def test_transcription_discovery_and_export_resume_after_restart(tmp_path, monkeypatch):
     setup_storage(tmp_path, monkeypatch)
     media_id, transcript_id, discovery_id, export_id, source = seed_media_and_jobs()
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._EXPORT_WORKER_STOP.clear()
 
     # Simulate a new application process opening the same persistent database.
     main_module._recover_interrupted_jobs()
@@ -160,7 +162,7 @@ def test_transcription_discovery_and_export_resume_after_restart(tmp_path, monke
     main_module.run_export_job(export_id, str(source), str(output))
 
     with database.get_connection() as connection:
-        transcription = connection.execute(
+        transcription_row = connection.execute(
             "SELECT status,attempt_count FROM transcription_jobs WHERE id=?", (transcript_id,)
         ).fetchone()
         discovery = connection.execute(
@@ -176,7 +178,7 @@ def test_transcription_discovery_and_export_resume_after_restart(tmp_path, monke
             "SELECT COUNT(*) FROM transcript_segments WHERE job_id=?", (transcript_id,)
         ).fetchone()[0]
 
-    assert tuple(transcription) == ("completed", 2)
+    assert tuple(transcription_row) == ("completed", 2)
     assert tuple(discovery) == ("completed", 2)
     assert candidate_count == 1
     assert segment_count == 6
