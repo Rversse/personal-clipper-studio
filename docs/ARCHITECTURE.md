@@ -25,11 +25,12 @@ The frontend retries the health endpoint while the service is starting and conti
 3. Refuse to start the packaged service when port `8765` is already occupied rather than silently connecting to an unrelated process.
 4. Keep source media untouched. Derived assets live in an app-managed workspace.
 5. Persist project metadata locally in SQLite. Store Gemini API credentials in the current Windows user's Credential Manager; never persist them in SQLite, app settings files, or logs.
-6. Run transcription and rendering as background jobs with explicit state and cancellation.
-7. On restart, requeue interrupted exports from persisted render settings; retain a final MP4 only when the renderer's atomic commit left a valid MP4 signature, and clean job-scoped temporary artifacts before retrying.
-8. On graceful desktop shutdown, stop dequeuing exports, cancel active FFmpeg processes, persist cancellation, and wait for the export worker to exit before the backend process is terminated.
-8. AI output is advisory. Every candidate is reviewed by the user before export.
-9. Keep media processing provider-independent so FFmpeg and transcription engines can be replaced.
+6. Run transcription, AI discovery, and rendering as durable background jobs with explicit state and cancellation.
+7. Persist transcription and discovery queue state in SQLite. Dedicated workers claim queued jobs atomically, deduplicate matching active requests, and recover interrupted work after restart with a bounded crash-retry budget.
+8. On graceful desktop shutdown, stop dequeuing transcription and discovery jobs, cooperatively stop active work, and leave unfinished jobs queued for the next launch. Do not discard pending work merely because the UI or API process closes.
+9. On restart, requeue interrupted exports from persisted render settings; validate completed MP4 artifacts with FFprobe and clean job-scoped temporary artifacts before retrying.
+10. AI output is advisory. Every candidate is reviewed by the user before export.
+11. Keep media processing provider-independent so FFmpeg and transcription engines can be replaced.
 
 ## Processing pipeline
 
@@ -56,4 +57,4 @@ Import → probe metadata → transcribe → discover candidate moments → user
 
 ### Transcription and AI discovery cancellation
 
-Transcription and AI discovery jobs expose explicit cancellation endpoints. Cancellation is persisted immediately; Whisper checks the cancellation signal between decoded segments, while AI discovery checks between analysis chunks and after provider calls. A currently executing native Whisper inference segment or in-flight provider HTTP request is not forcibly interrupted; its result is discarded when control returns. Application shutdown signals active jobs and persists their cancelled state.
+Transcription and AI discovery jobs expose explicit cancellation endpoints. Cancellation is persisted immediately; Whisper checks the cancellation signal between decoded segments, while AI discovery checks between analysis chunks and after provider calls. A currently executing native Whisper inference segment or in-flight provider HTTP request is not forcibly interrupted; its result is discarded when control returns. Application shutdown signals active jobs cooperatively and requeues unfinished work; queued jobs remain durable. Crash recovery retries interrupted jobs up to three attempts before marking them failed. A user-requested cancellation remains terminal and is not requeued.

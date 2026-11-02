@@ -58,6 +58,7 @@ def ensure_storage() -> None:
                 duration REAL,
                 progress REAL NOT NULL DEFAULT 0,
                 error TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -97,6 +98,7 @@ def ensure_storage() -> None:
                 max_duration INTEGER NOT NULL,
                 progress REAL NOT NULL DEFAULT 0,
                 error TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -146,6 +148,19 @@ def ensure_storage() -> None:
             CREATE INDEX IF NOT EXISTS idx_export_status ON export_jobs(status);
             """
         )
+        transcription_columns = {row["name"] for row in connection.execute("PRAGMA table_info(transcription_jobs)").fetchall()}
+        if "attempt_count" not in transcription_columns:
+            connection.execute("ALTER TABLE transcription_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+        discovery_columns = {row["name"] for row in connection.execute("PRAGMA table_info(discovery_jobs)").fetchall()}
+        if "attempt_count" not in discovery_columns:
+            connection.execute("ALTER TABLE discovery_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_transcription_queue ON transcription_jobs(status,attempt_count,created_at,id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_discovery_queue ON discovery_jobs(status,attempt_count,created_at,id)"
+        )
+
         candidate_columns = {row["name"] for row in connection.execute("PRAGMA table_info(clip_candidates)").fetchall()}
         if "boundary_quality" not in candidate_columns:
             connection.execute("ALTER TABLE clip_candidates ADD COLUMN boundary_quality INTEGER NOT NULL DEFAULT 50")

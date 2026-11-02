@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 
 import pytest
@@ -17,6 +18,19 @@ def setup_test_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "MEDIA_DIR", tmp_path / "media")
     monkeypatch.setattr(main_module, "THUMBNAIL_DIR", tmp_path / "thumbnails")
     monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "test.sqlite3")
+
+
+def wait_for_discovery(client, job_id: str, timeout: float = 8.0):
+    deadline = time.monotonic() + timeout
+    latest = None
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/discovery/{job_id}")
+        assert response.status_code == 200
+        latest = response.json()
+        if latest["status"] in {"completed", "failed", "cancelled"}:
+            return latest
+        time.sleep(0.02)
+    raise AssertionError(f"Discovery job did not finish; last state: {latest}")
 
 
 def seed_completed_transcript():
@@ -54,6 +68,7 @@ def seed_completed_transcript():
 
 def test_queued_discovery_can_be_cancelled(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
     monkeypatch.setattr(
         ai_discovery, "provider_settings",
         lambda: {"provider": "gemini", "model": "test-model"},
@@ -80,6 +95,7 @@ def test_queued_discovery_can_be_cancelled(tmp_path, monkeypatch):
 
 def test_active_discovery_discards_provider_results_after_cancel(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
     with TestClient(app):
         media_id, transcript_id = seed_completed_transcript()
         job_id = str(uuid.uuid4())
@@ -151,9 +167,7 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
             },
         )
         assert response.status_code == 202
-        result = client.get(f"/api/discovery/{response.json()['id']}")
-        assert result.status_code == 200
-        payload = result.json()
+        payload = wait_for_discovery(client, response.json()["id"])
         assert payload["status"] == "completed"
         assert payload["progress"] == 1
         assert len(payload["candidates"]) == 1
@@ -171,6 +185,33 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
         latest_transcription = client.get(f"/api/media/{media_id}/transcriptions/latest")
         assert latest_transcription.status_code == 200
         assert latest_transcription.json()["id"] == transcript_id
+
+
+def test_duplicate_active_discovery_request_reuses_existing_job(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
+    monkeypatch.setattr(
+        ai_discovery, "provider_settings",
+        lambda: {"provider": "gemini", "model": "test-model"},
+    )
+    with TestClient(app) as client:
+        media_id, transcript_id = seed_completed_transcript()
+        payload = {
+            "transcription_id": transcript_id,
+            "mode": "auto",
+            "min_duration": 30,
+            "max_duration": 60,
+        }
+        first = client.post(f"/api/media/{media_id}/discovery", json=payload)
+        second = client.post(f"/api/media/{media_id}/discovery", json=payload)
+        assert first.status_code == second.status_code == 202
+        assert first.json()["id"] == second.json()["id"]
+        with database.get_connection() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) AS count FROM discovery_jobs WHERE transcription_id=?",
+                (transcript_id,),
+            ).fetchone()["count"]
+        assert count == 1
 
 
 def test_discovery_requires_completed_transcript(tmp_path, monkeypatch):
@@ -526,9 +567,8 @@ def test_discovery_job_loads_persisted_words_for_candidate_refinement(tmp_path, 
             },
         )
         assert created.status_code == 202
-        result = client.get(f"/api/discovery/{created.json()['id']}")
-        assert result.status_code == 200
-        candidate = result.json()["candidates"][0]
+        result = wait_for_discovery(client, created.json()["id"])
+        candidate = result["candidates"][0]
         assert candidate["start_seconds"] == 10.1
         assert candidate["end_seconds"] == 59.9
         assert "Presisi kata" in candidate["opening_boundary"]
