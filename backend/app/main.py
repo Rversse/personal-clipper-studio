@@ -1394,7 +1394,7 @@ def export_payload(job_id: str) -> dict:
 def run_export_job(job_id: str, source_path: str, destination_path: str) -> None:
     control = rendering.register_control(job_id)
     # Close the race where shutdown begins after the worker dequeues a job but
-    # before its render control is visible to cancel_all_controls().
+    # before its render control is visible to interrupt_all_controls().
     if _EXPORT_WORKER_STOP.is_set():
         control.interrupt()
 
