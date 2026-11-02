@@ -130,7 +130,7 @@ jobs:
           $checksums | ForEach-Object {
             "$($_.Hash)  $([System.IO.Path]::GetFileName($_.Path))"
           } | Set-Content (Join-Path $artifactDir "SHA256SUMS.txt")
-      - name: Install, launch, and uninstall both Windows packages
+      - name: Install, launch, and uninstall the single Windows package
         shell: pwsh
         run: ./scripts/smoke_test_windows_installers.ps1 -ArtifactDirectory "build/windows-artifacts"
       - name: Upload Windows installers
