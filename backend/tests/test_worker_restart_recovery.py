@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 
 from app import ai_discovery, audio_analysis, database, main as main_module, rendering, transcription
@@ -373,3 +374,95 @@ def test_recovered_export_history_and_download_survive_application_restart(tmp_p
             "SELECT status,progress FROM export_jobs WHERE id=?", (export_id,)
         ).fetchone()
     assert tuple(persisted) == ("completed", 1.0)
+
+
+def test_transcription_shutdown_requeue_survives_next_startup(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    _, transcript_id, _, _, source = seed_media_and_jobs()
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._JOB_WORKER_STOP.clear()
+    monkeypatch.setattr(main_module, "_TRANSCRIPTION_WORKER_THREAD", None)
+    monkeypatch.setattr(main_module, "_DISCOVERY_WORKER_THREAD", None)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_transcribe(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return {"language": "id", "language_probability": 0.99, "duration": 60.0, "segments": []}
+
+    monkeypatch.setattr(transcription, "transcribe_file", slow_transcribe)
+    worker = threading.Thread(
+        target=main_module.run_transcription_job,
+        args=(transcript_id, str(source), "tiny", "id"),
+    )
+    worker.start()
+    assert entered.wait(timeout=5)
+
+    main_module.stop_job_workers()
+    with database.get_connection() as connection:
+        state = connection.execute(
+            "SELECT status,attempt_count FROM transcription_jobs WHERE id=?", (transcript_id,)
+        ).fetchone()
+    assert tuple(state) == ("queued", 0)
+
+    # Simulate the next application startup while the old provider call is
+    # still unwinding; its cancellation event remains set, global flag clears.
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._JOB_WORKER_STOP.clear()
+    release.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+
+    with database.get_connection() as connection:
+        state = connection.execute(
+            "SELECT status,attempt_count,error FROM transcription_jobs WHERE id=?", (transcript_id,)
+        ).fetchone()
+    assert tuple(state) == ("queued", 0, None)
+
+
+def test_discovery_shutdown_requeue_survives_next_startup(tmp_path, monkeypatch):
+    setup_storage(tmp_path, monkeypatch)
+    _, transcript_id, discovery_id, _, source = seed_media_and_jobs()
+    with database.get_connection() as connection:
+        connection.execute(
+            "INSERT INTO transcript_segments(job_id,start,end,text) VALUES(?,?,?,?)",
+            (transcript_id, 0.0, 20.0, "Transkrip untuk uji shutdown discovery."),
+        )
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._JOB_WORKER_STOP.clear()
+    monkeypatch.setattr(main_module, "_TRANSCRIPTION_WORKER_THREAD", None)
+    monkeypatch.setattr(main_module, "_DISCOVERY_WORKER_THREAD", None)
+    monkeypatch.setattr(audio_analysis, "analyze_audio", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ai_discovery, "split_transcript", lambda transcript: [transcript])
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_discovery(*args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5)
+        return []
+
+    monkeypatch.setattr(ai_discovery, "analyze_transcript_chunk", slow_discovery)
+    worker = threading.Thread(target=main_module.run_discovery_job, args=(discovery_id,))
+    worker.start()
+    assert entered.wait(timeout=5)
+
+    main_module.stop_job_workers()
+    with database.get_connection() as connection:
+        state = connection.execute(
+            "SELECT status,attempt_count FROM discovery_jobs WHERE id=?", (discovery_id,)
+        ).fetchone()
+    assert tuple(state) == ("queued", 0)
+
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._JOB_WORKER_STOP.clear()
+    release.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+
+    with database.get_connection() as connection:
+        state = connection.execute(
+            "SELECT status,attempt_count,error FROM discovery_jobs WHERE id=?", (discovery_id,)
+        ).fetchone()
+    assert tuple(state) == ("queued", 0, None)
