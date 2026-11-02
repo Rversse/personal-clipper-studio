@@ -212,6 +212,8 @@ def test_shutdown_requeues_active_transcription_and_discovery_without_burning_at
     assert tuple(discovery_state) == ("queued", 0.0, 0, None)
     assert main_module._JOB_SHUTDOWN.is_set()
     assert main_module._JOB_WORKER_STOP.is_set()
+    main_module._JOB_SHUTDOWN.clear()
+    main_module._JOB_WORKER_STOP.clear()
 
 
 def test_job_control_registered_after_shutdown_is_cancelled_immediately(tmp_path, monkeypatch):
