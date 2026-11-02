@@ -131,6 +131,38 @@ def test_duplicate_active_transcription_request_reuses_existing_job(tmp_path, mo
         assert count == 1
 
 
+def test_shutdown_keeps_queued_jobs_and_requeues_processing_jobs(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
+    with TestClient(app):
+        media_id = seed_media()
+        timestamp = main_module.now_iso()
+        queued_id = str(uuid.uuid4())
+        processing_id = str(uuid.uuid4())
+        with database.get_connection() as connection:
+            connection.executemany(
+                """INSERT INTO transcription_jobs(
+                    id,media_id,status,model_name,created_at,updated_at
+                ) VALUES(?,? ,?,'tiny',?,?)""",
+                [
+                    (queued_id, media_id, "queued", timestamp, timestamp),
+                    (processing_id, media_id, "processing", timestamp, timestamp),
+                ],
+            )
+
+        main_module.stop_job_workers()
+
+        with database.get_connection() as connection:
+            states = {
+                row["id"]: row["status"]
+                for row in connection.execute(
+                    "SELECT id,status FROM transcription_jobs WHERE id IN (?,?)",
+                    (queued_id, processing_id),
+                ).fetchall()
+            }
+        assert states == {queued_id: "queued", processing_id: "queued"}
+
+
 def test_recovery_requeues_interrupted_jobs_and_enforces_attempt_limit(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
     database.ensure_storage()
