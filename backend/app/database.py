@@ -70,6 +70,7 @@ def ensure_storage() -> None:
                 text TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_transcription_media ON transcription_jobs(media_id);
+            CREATE INDEX IF NOT EXISTS idx_transcription_queue ON transcription_jobs(status,attempt_count,created_at,id);
             CREATE INDEX IF NOT EXISTS idx_transcript_job ON transcript_segments(job_id);
             CREATE TABLE IF NOT EXISTS transcript_words (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,6 +122,7 @@ def ensure_storage() -> None:
                 UNIQUE(discovery_job_id, start_seconds, end_seconds)
             );
             CREATE INDEX IF NOT EXISTS idx_discovery_media ON discovery_jobs(media_id);
+            CREATE INDEX IF NOT EXISTS idx_discovery_queue ON discovery_jobs(status,attempt_count,created_at,id);
             CREATE INDEX IF NOT EXISTS idx_candidate_job ON clip_candidates(discovery_job_id);
             CREATE TABLE IF NOT EXISTS export_jobs (
                 id TEXT PRIMARY KEY,
