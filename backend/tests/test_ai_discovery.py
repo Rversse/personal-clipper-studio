@@ -68,6 +68,7 @@ def seed_completed_transcript():
 
 def test_queued_discovery_can_be_cancelled(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
     monkeypatch.setattr(
         ai_discovery, "provider_settings",
         lambda: {"provider": "gemini", "model": "test-model"},
@@ -94,6 +95,7 @@ def test_queued_discovery_can_be_cancelled(tmp_path, monkeypatch):
 
 def test_active_discovery_discards_provider_results_after_cancel(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
     with TestClient(app):
         media_id, transcript_id = seed_completed_transcript()
         job_id = str(uuid.uuid4())
@@ -183,6 +185,33 @@ def test_discovery_job_persists_validated_candidates(tmp_path, monkeypatch):
         latest_transcription = client.get(f"/api/media/{media_id}/transcriptions/latest")
         assert latest_transcription.status_code == 200
         assert latest_transcription.json()["id"] == transcript_id
+
+
+def test_duplicate_active_discovery_request_reuses_existing_job(tmp_path, monkeypatch):
+    setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
+    monkeypatch.setattr(
+        ai_discovery, "provider_settings",
+        lambda: {"provider": "gemini", "model": "test-model"},
+    )
+    with TestClient(app) as client:
+        media_id, transcript_id = seed_completed_transcript()
+        payload = {
+            "transcription_id": transcript_id,
+            "mode": "auto",
+            "min_duration": 30,
+            "max_duration": 60,
+        }
+        first = client.post(f"/api/media/{media_id}/discovery", json=payload)
+        second = client.post(f"/api/media/{media_id}/discovery", json=payload)
+        assert first.status_code == second.status_code == 202
+        assert first.json()["id"] == second.json()["id"]
+        with database.get_connection() as connection:
+            count = connection.execute(
+                "SELECT COUNT(*) AS count FROM discovery_jobs WHERE transcription_id=?",
+                (transcript_id,),
+            ).fetchone()["count"]
+        assert count == 1
 
 
 def test_discovery_requires_completed_transcript(tmp_path, monkeypatch):
