@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app import ai_discovery, database, main as main_module, rendering, transcription
+from app import ai_discovery, audio_analysis, database, main as main_module, rendering, transcription
 from app.main import app
 
 
