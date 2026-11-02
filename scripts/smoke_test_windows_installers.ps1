@@ -244,35 +244,19 @@ function Wait-ForUninstall {
 
 try {
     $artifactPath = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
-    $nsis = Get-ChildItem $artifactPath -Filter "*-setup.exe" -File | Select-Object -First 1
-    $msi = Get-ChildItem $artifactPath -Filter "*.msi" -File | Select-Object -First 1
-    if ($null -eq $nsis -or $null -eq $msi) {
-        throw "Both NSIS setup.exe and MSI installer files must exist in $artifactPath."
+    $installers = @(Get-ChildItem $artifactPath -Filter "*-setup.exe" -File)
+    if ($installers.Count -ne 1) {
+        throw "Expected exactly one NSIS setup.exe installer in $artifactPath; found $($installers.Count)."
     }
-
-    Write-Host "Installing NSIS package: $($nsis.Name)"
+    $nsis = $installers[0]
+    Write-Host "Installing single NSIS package: $($nsis.Name)"
     Invoke-CheckedProcess -FilePath $nsis.FullName -ArgumentLine "/S" | Out-Null
-    $nsisInstall = Wait-ForInstalledApp
-    Test-InstalledApplication -InstallerLabel "NSIS" -ExecutablePath $nsisInstall.Executable
-    Uninstall-NsisApplication -Installation $nsisInstall
+    $installation = Wait-ForInstalledApp
+    Test-InstalledApplication -InstallerLabel "NSIS" -ExecutablePath $installation.Executable
+    Uninstall-NsisApplication -Installation $installation
     Wait-ForUninstall
     Wait-ForPortClosed
-    Write-Host "NSIS install and uninstall passed."
-
-    Write-Host "Installing MSI package: $($msi.Name)"
-    $msiLog = Join-Path $TempRoot "msi-install.log"
-    $msiArguments = '/i "' + $msi.FullName + '" /qn /norestart /L*v "' + $msiLog + '"'
-    Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentLine $msiArguments -TimeoutSeconds 240 -AcceptedExitCodes @(0, 3010) | Out-Null
-    $msiInstall = Wait-ForInstalledApp
-    Test-InstalledApplication -InstallerLabel "MSI" -ExecutablePath $msiInstall.Executable
-
-    $uninstallArguments = '/x "' + $msi.FullName + '" /qn /norestart'
-    Invoke-CheckedProcess -FilePath "msiexec.exe" -ArgumentLine $uninstallArguments -TimeoutSeconds 180 -AcceptedExitCodes @(0, 1605, 3010) | Out-Null
-    Wait-ForUninstall
-    Wait-ForPortClosed
-    Write-Host "MSI install and uninstall passed."
-
-    Write-Host "Both Windows installer formats passed install, desktop launch, bundled API, SQLite, and uninstall checks."
+    Write-Host "Single NSIS installer passed install, desktop launch, bundled API, SQLite, and uninstall checks."
 }
 finally {
     if (Test-LoopbackPort) {
