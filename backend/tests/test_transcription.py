@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import uuid
 from types import SimpleNamespace
 
@@ -17,6 +18,19 @@ def setup_test_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "MEDIA_DIR", tmp_path / "media")
     monkeypatch.setattr(main_module, "THUMBNAIL_DIR", tmp_path / "thumbnails")
     monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "test.sqlite3")
+
+
+def wait_for_transcription(client, job_id: str, timeout: float = 5.0):
+    deadline = time.monotonic() + timeout
+    latest = None
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/transcriptions/{job_id}")
+        assert response.status_code == 200
+        latest = response.json()
+        if latest["status"] in {"completed", "failed", "cancelled"}:
+            return latest
+        time.sleep(0.02)
+    raise AssertionError(f"Transcription job did not finish; last state: {latest}")
 
 
 def seed_media():
@@ -62,6 +76,7 @@ def test_queued_transcription_can_be_cancelled(tmp_path, monkeypatch):
 
 def test_active_transcription_discards_results_after_cooperative_cancel(tmp_path, monkeypatch):
     setup_test_storage(tmp_path, monkeypatch)
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
     with TestClient(app):
         media_id = seed_media()
         job_id = str(uuid.uuid4())
@@ -132,9 +147,7 @@ def test_transcription_job_persists_segments(tmp_path, monkeypatch):
         assert created.status_code == 202
         job_id = created.json()["id"]
 
-        result = client.get(f"/api/transcriptions/{job_id}")
-        assert result.status_code == 200
-        payload = result.json()
+        payload = wait_for_transcription(client, job_id)
         assert payload["status"] == "completed"
         assert payload["detected_language"] == "id"
         assert payload["progress"] == 1
@@ -169,7 +182,7 @@ def test_word_timestamps_are_persisted_and_returned(tmp_path, monkeypatch):
             json={"model_name": "tiny", "language": "id"},
         )
         job_id = created.json()["id"]
-        payload = client.get(f"/api/transcriptions/{job_id}").json()
+        payload = wait_for_transcription(client, job_id)
         assert len(payload["segments"]) == 1
         assert payload["segments"][0]["words"] == [
             {"start": 0.2, "end": 0.8, "text": "Halo", "probability": 0.98},
@@ -223,7 +236,7 @@ def test_update_word_timing_validates_and_persists(tmp_path, monkeypatch):
             json={"model_name": "tiny"},
         )
         job_id = created.json()["id"]
-        segment = client.get(f"/api/transcriptions/{job_id}").json()["segments"][0]
+        segment = wait_for_transcription(client, job_id)["segments"][0]
         segment_id = segment["id"]
         good = client.patch(
             f"/api/transcriptions/{job_id}/segments/{segment_id}/words/0",
