@@ -181,10 +181,16 @@ def ensure_storage() -> None:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN clip_segments TEXT")
         if "crop_zoom" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_zoom REAL NOT NULL DEFAULT 1.0")
+            # Materialize defaults for pre-existing rows. SQLite versions used by
+            # packaged Python runtimes can otherwise report virtual ALTER defaults
+            # as NULL during PRAGMA integrity_check.
+            connection.execute("UPDATE export_jobs SET crop_zoom=1.0")
         if "crop_x" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_x REAL NOT NULL DEFAULT 0.5")
+            connection.execute("UPDATE export_jobs SET crop_x=0.5")
         if "crop_y" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN crop_y REAL NOT NULL DEFAULT 0.5")
+            connection.execute("UPDATE export_jobs SET crop_y=0.5")
         if "render_settings" not in export_columns:
             connection.execute("ALTER TABLE export_jobs ADD COLUMN render_settings TEXT")
 
