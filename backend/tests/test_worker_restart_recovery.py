@@ -331,3 +331,45 @@ def test_export_recovery_removes_partial_artifacts_before_requeue(tmp_path, monk
     assert not output.exists()
     assert not partial.exists()
     assert not temporary.exists()
+
+
+def test_recovered_export_history_and_download_survive_application_restart(tmp_path, monkeypatch):
+    """A validated output recovered at startup remains visible and downloadable."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    setup_storage(tmp_path, monkeypatch)
+    _, _, _, export_id, _ = seed_media_and_jobs()
+    output = database.EXPORT_DIR / f"clip-{export_id}.mp4"
+    committed_bytes = b"validated-complete-mp4-after-restart"
+    output.write_bytes(committed_bytes)
+
+    monkeypatch.setattr(main_module, "_is_completed_export", lambda path: path == output and path.is_file())
+    monkeypatch.setattr(main_module, "start_job_workers", lambda: None)
+    monkeypatch.setattr(main_module, "start_export_worker", lambda: None)
+    monkeypatch.setattr(main_module, "stop_job_workers", lambda: None)
+
+    with TestClient(app) as client:
+        detail = client.get(f"/api/exports/{export_id}")
+        assert detail.status_code == 200
+        assert detail.json()["status"] == "completed"
+        assert detail.json()["progress"] == 1
+        assert detail.json()["download_url"] == f"/api/exports/{export_id}/file"
+
+        history = client.get("/api/exports")
+        assert history.status_code == 200
+        recovered = next(item for item in history.json() if item["id"] == export_id)
+        assert recovered["status"] == "completed"
+        assert recovered["progress"] == 1
+
+        download = client.get(f"/api/exports/{export_id}/file")
+        assert download.status_code == 200
+        assert download.headers["content-type"] == "video/mp4"
+        assert download.content == committed_bytes
+
+    with database.get_connection() as connection:
+        persisted = connection.execute(
+            "SELECT status,progress FROM export_jobs WHERE id=?", (export_id,)
+        ).fetchone()
+    assert tuple(persisted) == ("completed", 1.0)
