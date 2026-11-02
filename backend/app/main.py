@@ -1056,6 +1056,12 @@ def run_discovery_job(job_id: str) -> None:
     try:
         check_cancelled()
         with get_connection() as connection:
+            claimed = connection.execute(
+                "UPDATE discovery_jobs SET status='processing', attempt_count=attempt_count+1, updated_at=? WHERE id=? AND status='queued' AND attempt_count < ?",
+                (now_iso(), job_id, MAX_JOB_ATTEMPTS),
+            ).rowcount
+            if not claimed:
+                return
             job = connection.execute(
                 "SELECT * FROM discovery_jobs WHERE id=?", (job_id,)
             ).fetchone()
@@ -1091,13 +1097,6 @@ def run_discovery_job(job_id: str) -> None:
         if not transcript:
             raise ValueError("Transkrip tidak memiliki segmen untuk dianalisis.")
 
-        with get_connection() as connection:
-            claimed = connection.execute(
-                "UPDATE discovery_jobs SET status='processing', attempt_count=attempt_count+1, updated_at=? WHERE id=? AND status='queued' AND attempt_count < ?",
-                (now_iso(), job_id, MAX_JOB_ATTEMPTS),
-            ).rowcount
-        if not claimed:
-            return
         check_cancelled()
 
         audio_features = None
