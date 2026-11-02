@@ -133,20 +133,20 @@ def recover_interrupted_media_imports() -> dict[str, int]:
     for path in MEDIA_DIR.iterdir():
         if not path.is_file():
             continue
-        if re.fullmatch(rf"\\.{uuid_pattern}\\.uploading", path.name):
+        if re.fullmatch(rf"\.{uuid_pattern}\.uploading", path.name):
             path.unlink(missing_ok=True)
             removed["staged_media"] += 1
-        elif re.fullmatch(rf"{uuid_pattern}\\.[a-z0-9]+", path.name) and path.name not in referenced_media:
+        elif re.fullmatch(rf"{uuid_pattern}\.[a-z0-9]+", path.name) and path.name not in referenced_media:
             path.unlink(missing_ok=True)
             removed["orphan_media"] += 1
 
     for path in THUMBNAIL_DIR.iterdir():
         if not path.is_file():
             continue
-        if re.fullmatch(rf"\\.{uuid_pattern}\\.uploading\\.jpg", path.name):
+        if re.fullmatch(rf"\.{uuid_pattern}\.uploading\.jpg", path.name):
             path.unlink(missing_ok=True)
             removed["staged_thumbnails"] += 1
-        elif re.fullmatch(rf"{uuid_pattern}\\.jpg", path.name) and path.name not in referenced_thumbnails:
+        elif re.fullmatch(rf"{uuid_pattern}\.jpg", path.name) and path.name not in referenced_thumbnails:
             path.unlink(missing_ok=True)
             removed["orphan_thumbnails"] += 1
 
