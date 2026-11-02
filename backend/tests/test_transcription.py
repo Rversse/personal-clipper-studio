@@ -154,13 +154,13 @@ def test_shutdown_keeps_queued_jobs_and_requeues_processing_jobs(tmp_path, monke
 
         with database.get_connection() as connection:
             states = {
-                row["id"]: row["status"]
+                row["id"]: (row["status"], row["attempt_count"])
                 for row in connection.execute(
-                    "SELECT id,status FROM transcription_jobs WHERE id IN (?,?)",
+                    "SELECT id,status,attempt_count FROM transcription_jobs WHERE id IN (?,?)",
                     (queued_id, processing_id),
                 ).fetchall()
             }
-        assert states == {queued_id: "queued", processing_id: "queued"}
+        assert states == {queued_id: ("queued", 0), processing_id: ("queued", 0)}
 
 
 def test_recovery_requeues_interrupted_jobs_and_enforces_attempt_limit(tmp_path, monkeypatch):
