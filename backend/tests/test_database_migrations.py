@@ -112,27 +112,27 @@ def test_legacy_database_upgrade_preserves_user_data_and_adds_schema(tmp_path, m
     database.ensure_storage()
 
     with database.get_connection() as connection:
-        assert connection.execute(
+        assert tuple(connection.execute(
             "SELECT name,description FROM projects WHERE id='p-legacy'"
-        ).fetchone() == ("Legacy project", "keep me")
-        assert connection.execute(
+        ).fetchone()) == ("Legacy project", "keep me")
+        assert tuple(connection.execute(
             "SELECT original_name,file_size FROM media_assets WHERE id='m-legacy'"
-        ).fetchone() == ("original.mp4", 12345)
-        assert connection.execute(
+        ).fetchone()) == ("original.mp4", 12345)
+        assert tuple(connection.execute(
             "SELECT status,model_name FROM transcription_jobs WHERE id='t-legacy'"
-        ).fetchone() == ("completed", "small")
-        assert connection.execute(
+        ).fetchone()) == ("completed", "small")
+        assert tuple(connection.execute(
             "SELECT start,end,text FROM transcript_segments WHERE job_id='t-legacy'"
-        ).fetchone() == (1.25, 3.5, "legacy transcript survives")
-        assert connection.execute(
+        ).fetchone()) == (1.25, 3.5, "legacy transcript survives")
+        assert tuple(connection.execute(
             "SELECT status,provider FROM discovery_jobs WHERE id='d-legacy'"
-        ).fetchone() == ("completed", "ollama")
-        assert connection.execute(
+        ).fetchone()) == ("completed", "ollama")
+        assert tuple(connection.execute(
             "SELECT title,score FROM clip_candidates WHERE id='c-legacy'"
-        ).fetchone() == ("Legacy title", 88)
-        assert connection.execute(
+        ).fetchone()) == ("Legacy title", 88)
+        assert tuple(connection.execute(
             "SELECT status,output_name FROM export_jobs WHERE id='e-legacy'"
-        ).fetchone() == ("completed", "legacy-export.mp4")
+        ).fetchone()) == ("completed", "legacy-export.mp4")
 
         expected_columns = {
             "transcription_jobs": {"attempt_count"},
@@ -151,23 +151,23 @@ def test_legacy_database_upgrade_preserves_user_data_and_adds_schema(tmp_path, m
             }
             assert expected <= actual
 
-        assert connection.execute(
+        assert tuple(connection.execute(
             "SELECT attempt_count FROM transcription_jobs WHERE id='t-legacy'"
         ).fetchone()[0] == 0
-        assert connection.execute(
+        assert tuple(connection.execute(
             "SELECT attempt_count FROM discovery_jobs WHERE id='d-legacy'"
         ).fetchone()[0] == 0
-        assert connection.execute(
+        assert tuple(connection.execute(
             "SELECT boundary_quality,context_note FROM clip_candidates WHERE id='c-legacy'"
-        ).fetchone() == (50, "")
-        assert connection.execute(
+        ).fetchone()) == (50, "")
+        assert tuple(connection.execute(
             "SELECT subtitle_preset,crop_zoom,crop_x,crop_y FROM export_jobs WHERE id='e-legacy'"
-        ).fetchone() == ("clean", 1.0, 0.5, 0.5)
+        ).fetchone()) == ("clean", 1.0, 0.5, 0.5)
 
-        assert connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM transcript_segments").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM clip_candidates").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM export_jobs").fetchone()[0] == 1
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert tuple(connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 1
+        assert tuple(connection.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0] == 1
+        assert tuple(connection.execute("SELECT COUNT(*) FROM transcript_segments").fetchone()[0] == 1
+        assert tuple(connection.execute("SELECT COUNT(*) FROM clip_candidates").fetchone()[0] == 1
+        assert tuple(connection.execute("SELECT COUNT(*) FROM export_jobs").fetchone()[0] == 1
+        assert tuple(connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert tuple(connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
