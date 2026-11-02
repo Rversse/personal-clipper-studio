@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
@@ -38,6 +38,12 @@ _EXPORT_WORKER_STOP = threading.Event()
 _JOB_CONTROLS_LOCK = threading.Lock()
 _JOB_CANCEL_EVENTS: dict[str, threading.Event] = {}
 _JOB_SHUTDOWN = threading.Event()
+_TRANSCRIPTION_WAKE = threading.Event()
+_DISCOVERY_WAKE = threading.Event()
+_JOB_WORKER_STOP = threading.Event()
+_TRANSCRIPTION_WORKER_THREAD: threading.Thread | None = None
+_DISCOVERY_WORKER_THREAD: threading.Thread | None = None
+MAX_JOB_ATTEMPTS = 3
 
 # A session token is injected only by the packaged Tauri host. Running the API
 # manually for local development remains possible without desktop IPC.
@@ -104,17 +110,119 @@ def _unregister_job_control(job_id: str) -> None:
         _JOB_CANCEL_EVENTS.pop(job_id, None)
 
 
-def _cancel_background_jobs() -> None:
-    with _JOB_CONTROLS_LOCK:
-        active = list(_JOB_CANCEL_EVENTS.values())
-    for event in active:
-        event.set()
+def _recover_interrupted_jobs() -> None:
+    """Requeue interrupted work after a crash, with a bounded crash-recovery budget."""
     timestamp = now_iso()
     with get_connection() as connection:
         for table in ("transcription_jobs", "discovery_jobs"):
             connection.execute(
-                f"UPDATE {table} SET status='cancelled', error='Proses dibatalkan karena aplikasi ditutup.', updated_at=? WHERE status IN ('queued','processing')",
-                (timestamp,),
+                f"""UPDATE {table}
+                    SET status=CASE WHEN attempt_count < ? THEN 'queued' ELSE 'failed' END,
+                        progress=CASE WHEN attempt_count < ? THEN 0 ELSE progress END,
+                        error=CASE WHEN attempt_count < ?
+                            THEN NULL ELSE 'Pekerjaan dihentikan setelah beberapa kali crash aplikasi.' END,
+                        updated_at=?
+                    WHERE status='processing'
+                       OR (status='queued' AND attempt_count >= ?)""",
+                (MAX_JOB_ATTEMPTS, MAX_JOB_ATTEMPTS, MAX_JOB_ATTEMPTS, timestamp, MAX_JOB_ATTEMPTS),
+            )
+
+
+def _queued_transcription() -> tuple[str, str, str, str | None] | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """SELECT j.id,j.model_name,j.language,m.id AS media_id,m.stored_name
+               FROM transcription_jobs j
+               JOIN media_assets m ON m.id=j.media_id
+               WHERE j.status='queued' AND j.attempt_count < ?
+               ORDER BY j.created_at,j.id LIMIT 1""",
+            (MAX_JOB_ATTEMPTS,),
+        ).fetchone()
+    if row is None:
+        return None
+    extension = Path(str(row["stored_name"])).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status='queued'",
+                ("Referensi file media tidak valid; transkripsi tidak dapat dijalankan.", now_iso(), row["id"]),
+            )
+        return ("", "", "", None)
+    source = _managed_file_path(MEDIA_DIR, row["stored_name"], f"{row['media_id']}{extension}")
+    if not source.is_file():
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE transcription_jobs SET status='failed',error=?,updated_at=? WHERE id=? AND status='queued'",
+                ("File media sumber tidak ditemukan; transkripsi tidak dapat dijalankan.", now_iso(), row["id"]),
+            )
+        return ("", "", "", None)
+    return (str(row["id"]), str(source), str(row["model_name"]), row["language"])
+
+
+def _job_worker_loop(job_type: str) -> None:
+    wake = _TRANSCRIPTION_WAKE if job_type == "transcription" else _DISCOVERY_WAKE
+    while not _JOB_WORKER_STOP.is_set():
+        wake.clear()
+        if _JOB_WORKER_STOP.is_set():
+            break
+        if job_type == "transcription":
+            queued = _queued_transcription()
+            if queued is not None:
+                job_id, source_path, model_name, language = queued
+                if job_id:
+                    run_transcription_job(job_id, source_path, model_name, language)
+                continue
+        else:
+            with get_connection() as connection:
+                row = connection.execute(
+                    """SELECT id FROM discovery_jobs
+                       WHERE status='queued' AND attempt_count < ?
+                       ORDER BY created_at,id LIMIT 1""",
+                    (MAX_JOB_ATTEMPTS,),
+                ).fetchone()
+            if row is not None:
+                run_discovery_job(str(row["id"]))
+                continue
+        wake.wait(0.75)
+
+
+def start_job_workers() -> None:
+    global _TRANSCRIPTION_WORKER_THREAD, _DISCOVERY_WORKER_THREAD
+    _JOB_WORKER_STOP.clear()
+    for name, job_type, current in (
+        ("pcs-transcription-worker", "transcription", _TRANSCRIPTION_WORKER_THREAD),
+        ("pcs-discovery-worker", "discovery", _DISCOVERY_WORKER_THREAD),
+    ):
+        if current is not None and current.is_alive():
+            continue
+        worker = threading.Thread(target=_job_worker_loop, args=(job_type,), name=name, daemon=True)
+        worker.start()
+        if job_type == "transcription":
+            _TRANSCRIPTION_WORKER_THREAD = worker
+        else:
+            _DISCOVERY_WORKER_THREAD = worker
+    _TRANSCRIPTION_WAKE.set()
+    _DISCOVERY_WAKE.set()
+
+
+def stop_job_workers() -> None:
+    """Cooperatively stop active work and leave unfinished jobs durable for next launch."""
+    _JOB_SHUTDOWN.set()
+    with _JOB_CONTROLS_LOCK:
+        active = list(_JOB_CANCEL_EVENTS.values())
+    for event in active:
+        event.set()
+    _JOB_WORKER_STOP.set()
+    _TRANSCRIPTION_WAKE.set()
+    _DISCOVERY_WAKE.set()
+    for worker in (_TRANSCRIPTION_WORKER_THREAD, _DISCOVERY_WORKER_THREAD):
+        if worker is not None:
+            worker.join(timeout=10)
+    with get_connection() as connection:
+        for table in ("transcription_jobs", "discovery_jobs"):
+            connection.execute(
+                f"UPDATE {table} SET status='queued',progress=0,error=NULL,updated_at=? WHERE status='processing'",
+                (now_iso(),),
             )
 
 def _is_completed_export(path: Path) -> bool:
