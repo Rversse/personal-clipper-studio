@@ -7,7 +7,9 @@ desktop host requests a graceful shutdown through stdin before using a hard kill
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from pathlib import Path
 import threading
 from typing import TextIO
 
@@ -82,6 +84,14 @@ def main(argv: list[str] | None = None) -> None:
         session_token = first_line.removeprefix("session:").strip()
         if len(session_token) != 36:
             raise SystemExit("The desktop session handshake is invalid.")
+
+    # PyInstaller's onedir executable lives beside the Tauri-staged ffmpeg folder.
+    # Put it first on PATH so all existing FFmpeg/FFprobe call sites (including
+    # rendering validation and audio analysis) use the bundled tools automatically.
+    if getattr(sys, "frozen", False):
+        bundled_media_dir = Path(sys.executable).resolve().parent / "ffmpeg"
+        if bundled_media_dir.is_dir():
+            os.environ["PATH"] = str(bundled_media_dir) + os.pathsep + os.environ.get("PATH", "")
 
     import uvicorn
     from app.main import app, configure_session_token
