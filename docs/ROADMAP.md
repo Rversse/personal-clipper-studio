@@ -75,3 +75,11 @@
 - [x] Tauri-managed Windows backend startup/shutdown, loopback binding, port-collision guard, and persistent backend log
 - [ ] Install and launch MSI/NSIS on a clean physical Windows machine; verify FFmpeg, CPU Whisper model download, and optional GPU/NVENC behavior
 - [ ] Performance profiling on target hardware
+
+
+## Phase 7 — end-to-end reliability audit (in progress)
+- [x] Separate graceful-shutdown interruption from explicit export cancellation; preserve active export jobs for the next launch.
+- [ ] Exercise import → word-timestamp transcription → AI discovery → candidate validation → subtitle/crop editing → multi-clip export as one connected workflow.
+- [ ] Restart the desktop app during transcription, discovery, and export; verify queued/active jobs recover and terminal user cancellations remain terminal.
+- [ ] Verify export history, job status, progress, and downloadable MP4 integrity remain consistent after recovery.
+- [ ] Run the full workflow against a real local media fixture and perform a clean Windows installer install/launch/uninstall smoke test.
