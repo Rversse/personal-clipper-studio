@@ -5,9 +5,6 @@ existing rendering tests separately exercise real FFmpeg output when available.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 
 from app import ai_discovery, database, main as main_module, rendering, transcription
