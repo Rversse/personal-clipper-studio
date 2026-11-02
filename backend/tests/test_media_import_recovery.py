@@ -74,9 +74,9 @@ def test_recovery_removes_only_uncommitted_import_artifacts(tmp_path, monkeypatc
     assert (media_dir / "notes.txt").read_text(encoding="utf-8") == "keep"
     assert (thumbnail_dir / "custom-cover.jpg").read_bytes() == b"keep"
     assert sorted(path.name for path in media_dir.iterdir()) == [referenced_media, "notes.txt"]
-    assert sorted(path.name for path in thumbnail_dir.iterdir()) == [
+    assert sorted(path.name for path in thumbnail_dir.iterdir()) == sorted([
         referenced_thumbnail, "custom-cover.jpg"
-    ]
+    ])
 
 
 def test_recovery_is_idempotent_when_no_orphaned_import_files_remain(tmp_path, monkeypatch):
